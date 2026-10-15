@@ -70,6 +70,16 @@ Paths relative to `DECOMP/`. Originals in `../BASE GAME/` are never written.
 | E42 | **All 892 unique fragment programs** in the game disassemble with END exactly at the declared microcode length, with 0 unknown opcodes (structural validation only) | V | sweep over all shader assets |
 | E43 | `Custom/RainSplash` FP (6 instr + 1 const) translated to HLSL (`work/poc/RainSplash_fp.hlsl`); compiles with d3dcompiler_47 (ps_3_0). Vertex programs **not yet decoded** (tc1 projection semantics = inference) | V (compile) / I (visual equivalence) | `tools/hlsl_compile.py` |
 
+## Runtime oracle: RPCS3 (2026-10-15)
+| ID | Finding | Conf | Method |
+|----|---------|------|--------|
+| E44 | Retail `Rain.pkg` + FIX pkg install cleanly into RPCS3 v0.0.42 (FW 4.93); installed EBOOT = FIX EBOOT (sha1 match) | V | RPCS3 log "Successfully installed" ×2 |
+| E45 | Boot reaches game code: first-boot LLVM compile ≈ 58 s, then UnityMain thread runs | V | RPCS3 log |
+| E46 | At runtime the Unity player calls `sceNpDrmIsAvailable(k_licensee=*0x9ebbba, path)` before each SPRX load; with that klic RPCS3 **loads all 21 game PRX** (PRXManager, all Managed/*.sprx + .b.sprx, RainPS3Utility). The ahead-of-time "Failed to decrypt" SELF errors are only RPCS3's precompile pass (no klic yet) | V | RPCS3 log `sys_prx: Loaded module` lines |
+| E47 | Game opens mainData, level0, sharedassets0/1; ENOENT only on optional probes (`*.sdat`, `*.resS/.resG/.res`, mono gac policy, `.config`) — benign Unity/Mono fallbacks | V | RPCS3 log `sys_fs_open` |
+| E48 | Emulation runs at a stable 30 FPS (window title) 2.5 min in; no fatal errors; ShroudUnityPlugin not yet loaded at that point. User observation: game shows its first-run "adjust the screen display area" screen, so in-game UI renders | V (FPS, no fatal, UI shown) / U (gameplay) | window title, log, user report |
+| E49 | RPCS3 exposes a GDB stub on 127.0.0.1:2345 during emulation → usable for runtime breakpoints / memory inspection (behavioural oracle) | V (listening) / U (usability with this build) | RPCS3 log |
+
 ## Tooling capability (this host)
 | ID | Finding | Conf |
 |----|---------|------|
