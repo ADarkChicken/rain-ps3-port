@@ -1,0 +1,16 @@
+{
+ "EDAT_HASH_0": "",
+ "EDAT_HASH_1": "",
+ "EDAT_KEY_0": "",
+ "EDAT_KEY_1": "",
+ "NID_SUFFIX": "",
+ "NPDRM_ERK_19": "",
+ "NPDRM_ERK_1C": "",
+ "NPDRM_RIV_19": "",
+ "NPDRM_RIV_1C": "",
+ "NP_KLIC_FREE": "",
+ "NP_KLIC_KEY": "",
+ "PS3_PKG_KEY": "",
+ "SDAT_KEY": "",
+ "_comment": "Copy to keys.local.json and fill with hex values from RPCS3 source (rpcs3/Crypto/key_vault.h and key_vault.cpp): PS3_PKG_KEY=PKG_AES_KEY, NP_KLIC_FREE, NP_KLIC_KEY, SDAT_KEY, EDAT_KEY_0/1, EDAT_HASH_0/1; NPDRM_ERK/RIV_19 and _1C = KEY_NPDRM entries for revisions 0x0019/0x001C in key_vault.cpp; NID_SUFFIX = the 16-byte suffix in RPCS3 ppu_generate_id."
+}

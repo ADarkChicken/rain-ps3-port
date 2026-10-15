@@ -1,0 +1,35 @@
+# Allow-list: everything is ignored unless explicitly listed below.
+/*
+!/.gitignore
+!/README.md
+!/*.md
+!/FUNCTION_INDEX.csv
+
+# Own tools (keys live in tools/keys.local.json, never committed)
+!/tools/
+/tools/*
+!/tools/*.py
+!/tools/*.sh
+!/tools/keys.example.json
+!/tools/requirements.txt
+
+# Own Ghidra scripts
+!/ghidra/
+/ghidra/*
+!/ghidra/scripts/
+
+# Reconstructed source + derived statistics (no verbatim game code/data)
+!/work/
+/work/*
+!/work/poc/
+/work/poc/*
+!/work/poc/*.cs
+!/work/poc/*.hlsl
+!/work/asset_class_inventory.csv
+!/work/maps/
+/work/maps/*
+!/work/maps/monobehaviour_decode_summary.csv
+
+# Never: secrets, caches
+tools/keys.local.json
+__pycache__/
