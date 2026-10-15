@@ -10,6 +10,7 @@
 /tools/*
 !/tools/*.py
 !/tools/*.sh
+!/tools/*.ps1
 !/tools/keys.example.json
 !/tools/requirements.txt
 
