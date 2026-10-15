@@ -12,7 +12,8 @@ import unity_inventory as u
 PRIM = {2: ("bool", 1), 3: ("char", 2), 4: ("sbyte", 1), 5: ("byte", 1), 6: ("short", 2), 7: ("ushort", 2), 8: ("int", 4),
         9: ("uint", 4), 10: ("long", 8), 11: ("ulong", 8), 12: ("float", 4), 13: ("double", 8)}
 BUILTIN = {"Vector2": 2, "Vector3": 3, "Vector4": 4, "Quaternion": 4, "Color": 4, "Rect": 4, "Matrix4x4": 16, "Bounds": 6}
-UNSUPPORTED = {"AnimationCurve", "Gradient", "GUIStyle", "RectOffset", "Color32", "LayerMask"}
+UNSUPPORTED = {"Gradient", "GUIStyle", "RectOffset"}
+SPECIAL = {"LayerMask": ("prim", "uint", 4), "Color32": ("bytes4",), "AnimationCurve": ("curve",)}
 
 class Asm:
     def __init__(self, path):
@@ -73,6 +74,7 @@ class World:
         if a is None: return ("unknown",)
         nm = self.full(a, i); r = a.td[i-1]
         if nm.startswith("UnityEngine.") and nm.split(".")[-1] in BUILTIN: return ("floats", BUILTIN[nm.split(".")[-1]])
+        if nm.startswith("UnityEngine.") and nm.split(".")[-1] in SPECIAL: return SPECIAL[nm.split(".")[-1]]
         if nm.startswith("UnityEngine.") and nm.split(".")[-1] in UNSUPPORTED: return ("unsupported", nm)
         if self.is_uobject(a, i): return ("pptr",)
         ba, bi = self.base(a, i); bn = self.full(ba, bi) if ba else ""
@@ -124,7 +126,7 @@ def cu(b, i):
 
 class Bad(Exception): pass
 
-def read(w, node, b, p, depth=0):
+def read(w, node, b, p, depth=0, packed=False):
     al = lambda q: (q + 3) & ~3
     k = node[0]
     if k == "prim":
@@ -133,7 +135,7 @@ def read(w, node, b, p, depth=0):
                "long": "q", "ulong": "Q", "float": "f", "double": "d"}[nm]
         if p + sz > len(b): raise Bad("eof")
         v = struct.unpack(">" + fmt, b[p:p+sz])[0]; p += sz
-        if sz < 4: p = al(p)
+        if sz < 4 and not packed: p = al(p)
         return v, p
     if k == "string":
         n = struct.unpack(">i", b[p:p+4])[0]
@@ -150,8 +152,15 @@ def read(w, node, b, p, depth=0):
         n = struct.unpack(">i", b[p:p+4])[0]; p += 4
         if n < 0 or n > 100000: raise Bad("bad array len")
         out = []
-        for _ in range(n): v, p = read(w, node[1], b, p, depth+1); out.append(v)
+        for _ in range(n): v, p = read(w, node[1], b, p, depth+1, packed=True); out.append(v)
         return out, al(p)
+    if k == "bytes4":
+        return tuple(b[p:p+4]), p + 4
+    if k == "curve":  # Unity 3.5 AnimationCurve: Keyframe[] {time,value,inSlope,outSlope}, int preInfinity, int postInfinity
+        n = struct.unpack(">i", b[p:p+4])[0]; p += 4
+        if n < 0 or p + 16*n + 8 > len(b): raise Bad("bad curve")
+        keys = [struct.unpack(">4f", b[p+16*j:p+16*j+16]) for j in range(n)]; p += 16*n
+        return {"keys": keys, "pre_post": struct.unpack(">ii", b[p:p+8])}, p + 8
     if k == "inline":
         if depth > 8: raise Bad("depth")
         d = {}

@@ -47,6 +47,25 @@ Save, Camera, Effect, Rain. Also `Assembly-CSharp-firstpass`, `Assembly-UnityScr
 - Shaders: ShaderLab state + RSX microcode programs only.
 - Audio: SGXD banks driven by game `Sound*` code (no Unity AudioClips). Video: 8 MP4.
 
-## Port boundary (strategy S1, not yet approved)
-Replace: Unity PS3 player → Windows Unity runtime; RSX shaders → HLSL/GLSL; SGXD audio → PC audio;
-Shroud → PC cloth solution. Reconstruct: game C# (Assembly-CSharp & co.); NGUI part from its public library version.
+## Game ↔ engine boundary (verified, E58)
+Calls from Assembly-CSharp: 2,825 game-internal, 821 System.*, 795 UnityEngine (88 types). PS3-only surface:
+`SGXSource/SGXStream/SGXSettings`, `PS3SaveDataUtility`, `PS3TrophyUtility`, `PS3VideoPlayer`, `PS3Pad`,
+`PS3SystemUtility`, `PS3Info`, native `RainPS3Utility` (≈60 methods total). Runtime helpers (`mono_*`, exceptions,
+allocation, safepoints) are Mono mechanics, not game behaviour.
+
+## Target architecture (PROPOSED: see PORTING_PLAN.md, not yet approved)
+```
+ ┌───────────────────────── Windows x64 process ──────────────────────────────┐
+ │  Reconstructed game C#  (Assembly-CSharp, -firstpass, UnityScript x2)       │  ← S1, built on metadata skeleton
+ │  NGUI (public lib)  │  Rain.Platform shims: PS3*/SGX* API → Windows          │  ← S2/S5–S8
+ ├─────────────────────────────────────────────────────────────────────────────┤
+ │  Unity host runtime (candidate 4.7.x, decided in M0): D3D11, PhysX, Mono    │  ← S2, S10
+ │  Translated shaders (rsx2hlsl HLSL + original ShaderLab state)              │  ← S4
+ │  Cloth replacement (S9) │ Audio backend (converted SGXD)                     │  ← S9, S5
+ ├─────────────────────────────────────────────────────────────────────────────┤
+ │  Converted content produced locally from the user's own game files (S3)     │
+ └─────────────────────────────────────────────────────────────────────────────┘
+ Reference/oracle (not shipped): RPCS3 + GDB probe harness on the original build
+```
+Classification: portable logic = reconstruct; engine = replace; shaders = translate; PS3 APIs/plugins = reimplement;
+Shroud = replace; content = convert; videos = reuse.
