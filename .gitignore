@@ -13,6 +13,7 @@
 !/tools/*.ps1
 !/tools/keys.example.json
 !/tools/requirements.txt
+!/tools/unity/
 
 # Own Ghidra scripts
 !/ghidra/

@@ -1,6 +1,7 @@
 """Generate a compilable C# skeleton of a .NET assembly from IL metadata (bodies stripped by Mono AOT; E10).
 Usage: skeleton_gen.py <assembly.dll> <out.cs> [--exclude TypeA,TypeB] [ref.dll ...]
 --exclude: top-level types left out because a reconstructed source file provides them.
+--only: emit only these top-level types (used to generate platform shim stubs).
 Emits every type (classes, structs, enums, interfaces, delegates; nested), fields (+ Serializable/SerializeField/
 NonSerialized/const/readonly), properties/indexers, events, operators, constructors (with base-ctor chaining),
 generics + constraints, virtual/override/abstract/sealed, interface lists. Method bodies throw NotImplementedException.
@@ -75,8 +76,8 @@ class Asm:
         self.params = {i: [p.row for p in (r.ParamList or []) if p.row] for i, r in enumerate(self.md, 1)}
 
 class Gen:
-    def __init__(self, main, refs, exclude=()):
-        self.a = Asm(main); self.refs = [Asm(r) for r in refs]; self.exclude = set(exclude)
+    def __init__(self, main, refs, exclude=(), only=()):
+        self.a = Asm(main); self.refs = [Asm(r) for r in refs]; self.exclude = set(exclude); self.only = set(only)
         self.skipped = []
         self.by_full = {}
         for asm in [self.a] + self.refs:
@@ -409,12 +410,14 @@ class Gen:
             if ns: out.append(f"namespace {ns}"); out.append("{"); ind = "    "
             for i in items:
                 if str(self.a.td[i-1].TypeName) in self.exclude: continue
+                if self.only and str(self.a.td[i-1].TypeName) not in self.only: continue
                 self.emit_type(self.a, i, ind, out)
             if ns: out.append("}")
         open(out_path, "w", encoding="utf-8").write("\n".join(out) + "\n")
         print(f"{out_path}: {len(out)} lines; skipped {len(self.skipped)} compiler-generated/unsupported items")
 
 if __name__ == "__main__":
-    args = sys.argv[3:]; excl = []
-    if args and args[0] == "--exclude": excl = args[1].split(","); args = args[2:]
-    Gen(sys.argv[1], args, excl).run(sys.argv[2])
+    args = sys.argv[3:]; excl = []; only = []
+    while args and args[0] in ("--exclude", "--only"):
+        (excl if args[0] == "--exclude" else only).extend(args[1].split(",")); args = args[2:]
+    Gen(sys.argv[1], args, excl, only).run(sys.argv[2])

@@ -1,19 +1,19 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-10-16 (M0 in progress).
+Last updated: 2026-10-16 (M0 complete).
 
 ## Where we are
-**Phase 5, milestone M0 (approved 2026-10-16): IN PROGRESS.** Status per item (PORTING_PLAN §9):
-| M0 item | Status | Evidence |
+**Phase 5, milestone M0: COMPLETE (2026-10-16). Next milestones M1/M2 await the user's go-ahead.**
+| M0 item | Result | Evidence |
 |---|---|---|
-| 1 Host spike (Unity 4.7.2) | Installed, x64 players present, API fit measured (only PS3 types + 18 Rain extensions missing). **Blocked on user: license activation of the Unity editor** (GUI, Unity ID). Then: empty x64 D3D11 build | E63, E65 |
-| 2 Skeleton generator | **Done**: 4 assemblies chain-build, 0 errors; 21,940/21,940 members identical; reconstructed classes slot in | E64 |
-| 3 RPCS3 probe harness | Harness connected, breakpoint armed on RegionBox.OnRegionTriggerEnter; **waiting for gameplay** (user plays into Stage 1 under the slow interpreter config) to dump the RegionTrigger vtable and resolve E53 | E66 |
-| 4 Slice scene | Proposed: Stage 1 opening, starting with `st01_Prefab_A1` (level21), then neighbouring chunks/split sections in session load order | E67 |
+| 1 Host | Unity 4.7 rejected (activation impossible) → **Unity 2017.4.40f1** (D9): activated, empty x64 D3D11 player builds and runs | E70–E72 |
+| 2 Skeleton | 4 assemblies + PS3 shims compile **inside Unity 2017.4** with 0 errors (asmdef split); 21,940/21,940 members identical | E64, E73 |
+| 3 RPCS3 probe | Retail build + RAP in RPCS3; GDB harness; **vtable layout resolved** (reverse declaration order) | E66, E68, E69 |
+| 4 Slice scene | Stage 1 opening, starting with `st01_Prefab_A1` (level21) | E67 |
 
-**Exact next action:** (a) user activates Unity 4.7.2 (`G:/Decomp/Rain/_tools/Unity-4.7.2/Unity.exe`) then I build an empty
-x64 player headless; (b) user plays into gameplay so the probe fires; then record E53 resolution and close M0 with a
-DECISIONS entry for the host.
+**Exact next action:** ask the user to approve M1 (asset conversion: Texture2D/Mesh/Material/GameObject/Transform/renderers for
+level21) and M2 (`rsx2hlsl` over all 892 FP + 390 VP), which can run in parallel (PORTING_PLAN §5–6).
+**Housekeeping:** hosts file restored (only the original UTF-8 BOM differs; backup `hosts.bak-rain`); Unity 4.7 can be uninstalled.
 
 ## Completed and verified (details + evidence IDs in EVIDENCE.md)
 | Phase | Result | Evidence |
@@ -46,7 +46,7 @@ DECISIONS entry for the host.
 | C# compiler | `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe` | compile checks |
 | HLSL compiler | system `d3dcompiler_47.dll` via `tools/hlsl_compile.py` | shader checks |
 | REA MCP | rea-agents 6.5.0 (ghidra provider available; PPC64 unsupported) | .NET metadata |
-| Unity (host candidate) | 4.7.2f1 at `G:/Decomp/Rain/_tools/Unity-4.7.2` (installer in `G:/Decomp/Rain/_downloads/unity472`, sha256 30E462DF...) | engine host |
+| Unity host | **2017.4.40f1** at `G:/Decomp/Rain/_tools/Unity-2017.4.40f1` (license `C:/ProgramData/Unity/Unity_lic.ulf`; Unity Hub 3.22.3 via winget). Host-compile project: `G:/Decomp/Rain/_tools/m0_host_compile` (rebuild: `bash tools/m0_host_setup.sh`); empty x64 build test: `_tools/m0_empty_2017` + `tools/unity/BuildM0.cs`. Unity 4.7.2 also installed (unusable, E70) | engine host |
 | RPCS3 probe config | `work/rpcs3_cfg/config_probe.yml` (= user config with PPU Decoder: Interpreter (static)); launch: `rpcs3.exe --no-gui --config <that> <EBOOT>`; RAP installed in `dev_hdd0/home/00000001/exdata` | debugger probes |
 
 ## Key commands

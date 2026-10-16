@@ -1,6 +1,6 @@
 # PORTING PLAN: Rain (PS3, NPUA80719) → Windows x64
 
-Status: **PROPOSED, awaiting approval** (2026-10-15). Evidence IDs refer to `EVIDENCE.md`.
+Status: **APPROVED (2026-10-16); M0 COMPLETE (2026-10-16)**, host = Unity 2017.4 LTS (D9). Next: M1/M2 awaiting go-ahead. Evidence IDs refer to `EVIDENCE.md`.
 Principle: being able to decompile a function does not make the game portable. Portability is demonstrated only by
 milestones that run on Windows and match the original's observable behaviour, using RPCS3 as the reference (E44–E51).
 
@@ -31,8 +31,9 @@ The game logic expects the **Unity 3.5 API and behaviour** (E58: legacy `Particl
 
 | Option | Fidelity | x64 | Effort | Risk |
 |---|---|---|---|---|
-| **A. Unity 4.7.x** (recommended *candidate*) | High: same API generation, PhysX 2.8, legacy particles/animation/cloth still present; `active` deprecated but available | Yes | Medium | Editor availability/activation unverified; some 3.5→4.x semantic changes (`active`, Cloth) |
+| A. Unity 4.7.x (**rejected: activation impossible, E70**) | High: same API generation, PhysX 2.8, legacy particles/animation/cloth still present; `active` deprecated but available | Yes | Medium | Editor availability/activation unverified; some 3.5→4.x semantic changes (`active`, Cloth) |
 | B. Unity 3.5.7 | Highest (same engine line as the original) | **Unverified** (may be 32-bit only) | Medium | Same availability risk; may fail the x64 requirement |
+| **C'. Unity 2017.4 LTS (CHOSEN, D9)**: last version with legacy particles + .NET 3.5 runtime; API fit ≈ 4.7 (E71); PhysX 3.3 | High | Yes | Medium | Physics drift vs PhysX 2.8 (validate in M6) |
 | C. Modern Unity LTS (2022+) | Lower: legacy particles, old Cloth, `active` removed; PhysX 4 behaviour drift | Yes | High (API shims + re-tuning) | Physics/timing drift is hard to match |
 | D. Custom engine implementing the used Unity subset | Can be exact in principle | Yes | Very high | Reimplementing a large engine slice |
 
