@@ -1,17 +1,18 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-10-16 (M0 complete; M1 core + M2 compile done).
+Last updated: 2026-10-17 (M3 in progress: keyword bridge, lightmaps, light probes done).
 
 ## Where we are
-**Phase 5: M0 COMPLETE; M1 core pipeline and M2 shader compile COMPLETE (2026-10-16, user approved M1+M2).**
+**Phase 5: M0, M1, M2 (compile) COMPLETE; M3 (VS-1) IN PROGRESS (approved 2026-10-17; defaults: static scene only, poses from the opening of Stage 1, threshold set after first captures).**
 | Item | Result | Evidence |
 |---|---|---|
 | M0 Host | **Unity 2017.4.40f1** (D9), x64 D3D11 player builds/runs; skeleton + PS3 shims compile; vtable layout resolved | E63–E73 |
-| M1 Assets | Class readers byte-exact on all objects; DXT native; Stage 1 exported (4,238 GOs, 2,075 renderers, 809 meshes, 134 mats, 110 tex) and imported into Unity with identical counts; coherent render | E74–E78 |
+| M1 Assets | Class readers byte-exact on all objects; DXT native; Stage 1 exported (4,238 GOs, 2,075 renderers, 809 meshes, 134 mats, 123 tex incl. 13 lightmaps) and imported with identical counts; materials bound to `RainPS3/*` (134/134); lightmaps (754 renderers, runtime `RainLightmaps`) + render settings applied | E74–E78, E83 |
 | M2 Shaders | 1,282/1,282 RSX programs → HLSL compile (d3dcompiler); 183/183 shaders → ShaderLab, all supported in Unity, 0 errors, x64 build OK | E79–E82 |
+| M3 VS-1 | Done: variant selection via Unity built-in keywords (no RAINV), engine lightmap sampler, light-probe SH bridge (`RainLightProbes`). Open: golden captures, game-set global uniforms, render-texture samplers (`rain_*`), 1,118 ambient-only renderers + untextured planes to judge vs RPCS3 | E84–E85 |
 
-**Exact next action:** remaining M1 items — bind imported materials to the converted `RainPS3/*` shaders, lightmaps (dual: unity_Lightmap/Ind/Fade), render settings; then ask approval for M3 (runtime uniform/keyword bridge: RAINV_n selection from 3.5 keywords, unity_Scale, rain_* samplers, custom uniforms via SetVector; golden-image comparison vs RPCS3).
-**Local-only artefacts:** `work/export/st01`, `work/unity_shaders6` (generated shaders, game-derived — never commit), Unity project `G:/Decomp/Rain/port_unity`.
+**Exact next action:** RPCS3 reference captures (user plays to 3 spots in Stage 1; camera pose read via the GDB harness) → port renders the same poses → compare; then fix the largest differences (inferred SH convention/ambient scale E85, custom global uniforms set by Rain scripts, render-texture inputs).
+**Local-only artefacts:** `work/export/st01`, `work/unity_shaders7` (generated shaders, game-derived — never commit), Unity project `G:/Decomp/Rain/port_unity` (runtime scripts from `tools/unity/Runtime/` → `Assets/RainRuntime/`, editor scripts → `Assets/Editor/`).
 **Housekeeping:** hosts file restored (backup `hosts.bak-rain`); Unity 4.7 removal approved by user.
 
 ## Completed and verified (details + evidence IDs in EVIDENCE.md)

@@ -90,7 +90,26 @@ def mesh(r):
 
 def shader(r): return {"name": r.string(), "script": r.string(), "dependencies": r.vec(r.pptr)}
 
-READERS = {48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material}
+def rendersettings(r):
+    d = {"fog": (r.boolean(), r.align())[0], "fogColor": r.fs(4), "fogMode": r.i32(), "fogDensity": r.f32(),
+         "fogStart": r.f32(), "fogEnd": r.f32(), "ambient": r.fs(4), "skybox": r.pptr(), "haloStrength": r.f32(),
+         "flareStrength": r.f32(), "haloTexture": r.pptr(), "spotCookie": r.pptr()}
+    return d
+
+def lightmapsettings(r):
+    # Unity 3.5 dual lightmaps: m_Lightmap = far, m_IndirectLightmap = near
+    d = {"lightProbes": r.pptr(), "lightmaps": r.vec(lambda: (r.pptr(), r.pptr())), "mode": r.i32(),
+         "bakedColorSpace": r.i32(), "useDualInForward": (r.boolean(), r.align())[0]}
+    return d
+
+def lightprobes(r):
+    # tetra: 4 probe indices (-1 = outer cell, uses hullRays), 4 neighbours, 3x4 barycentric matrix
+    d = {"name": r.string(), "positions": r.vec(lambda: r.fs(3)), "coefficients": r.vec(lambda: r.fs(27)),   # 9 SH coeffs x RGB
+         "tetrahedra": r.vec(lambda: {"indices": [r.i32() for _ in range(4)], "neighbors": [r.i32() for _ in range(4)], "matrix": r.fs(12)}),
+         "hullRays": r.vec(lambda: r.fs(3))}
+    return d
+
+READERS = {197: lightprobes, 104: rendersettings, 157: lightmapsettings, 48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material}
 
 def validate(media, cids, dump=0):
     files = sorted(glob.glob(os.path.join(media, "level*"))) + sorted(glob.glob(os.path.join(media, "*.assets"))) \

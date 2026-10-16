@@ -1,7 +1,10 @@
 """Export a Rain scene (PS3 Unity 3.5) to a neutral intermediate for the Unity 2017.4 importer.
 Usage: rain_export.py <Media dir> <out dir> <levelfile> [prefab-levelfile ...]
 Output (out dir):
-  scene.json      {"objects":[{id,name,layer,tag,active,pos,rot,scale,parent,mesh,materials,lightmapIndex,lightmapST}], "roots":[...]}
+  scene.json      {"objects":[{id,name,layer,tag,active,pos,rot,scale,parent,mesh,materials,lightmapIndex,lightmapST}], "roots":[...],
+                   "lightmaps":[{far,near}] (texture ids or null), "lightmapsMode", "render":{RenderSettings fields},
+                   "lightProbes":{positions[3n], coefficients[27n], tetrahedra[4m] (-1 = outer cell)} or null}
+                  renderers also carry useLightProbes and probeAnchor (GO id, optional)
   materials.json  {"materials":[{id,name,shader,shaderName,textures:[{prop,tex,scale,offset}],floats:[{prop,value}],colors:[{prop,value}]}]}
   textures/<id>.dds, meshes/<id>.bin (see write_mesh), report.json (counts, skipped refs)
 IDs are "<file>@<pathID>". All objects are read with the byte-exact readers of unity35_classes.py (E75)."""
@@ -164,6 +167,8 @@ class Exporter:
                 rd = c.renderer_base(c.R(cb)); o["rendererEnabled"] = rd["enabled"]
                 o["materials"] = [self.material(self.F.resolve(cref[0], m)) for m in rd["materials"]]
                 o["lightmapIndex"] = rd["lightmapIndex"]; o["lightmapST"] = list(rd["lightmapTilingOffset"])
+                o["useLightProbes"] = rd["useLightProbes"]; aref = self.F.resolve(cref[0], rd["lightProbeAnchor"])
+                if aref: o["probeAnchor"] = rid(self.F.resolve(aref[0], c.transform(c.R(self.F.get(aref)[1]))["go"]))
             else:
                 self.report[f"component {ccid} skipped"] += 1
         self.objects.append(o)
@@ -190,12 +195,28 @@ class Exporter:
                 if ref and self.F.get(ref)[0] == 1: out.append(ref)
                 else: self.report["unresolved prefab"] += 1
         return out
+    def settings(self, level):
+        """LightmapSettings + RenderSettings of the main level (streamed prefab levels carry none, E83)."""
+        objs, _ = self.F.load(level); lm = rs = None
+        for pid, (cid, b) in objs.items():
+            if cid == 157: lm = c.lightmapsettings(c.R(b))
+            elif cid == 104: rs = c.rendersettings(c.R(b))
+        pref = self.F.resolve(level, lm["lightProbes"]); lp = c.lightprobes(c.R(self.F.get(pref)[1])) if pref else None
+        lm["lightProbes"] = lp and {"positions": [x for p in lp["positions"] for x in p], "coefficients": [x for k in lp["coefficients"] for x in k],
+                                    "tetrahedra": [i for t in lp["tetrahedra"] for i in t["indices"]]}
+        lm["lightmaps"] = [{"far": self.texture(self.F.resolve(level, f)), "near": self.texture(self.F.resolve(level, n))} for f, n in lm["lightmaps"]]
+        rs = {"fog": rs["fog"], "fogColor": list(rs["fogColor"]), "fogMode": rs["fogMode"], "fogDensity": rs["fogDensity"],
+              "fogStart": rs["fogStart"], "fogEnd": rs["fogEnd"], "ambient": list(rs["ambient"]), "skybox": self.material(self.F.resolve(level, rs["skybox"])),
+              "haloStrength": rs["haloStrength"], "flareStrength": rs["flareStrength"]}
+        return lm, rs
     def run(self, level, prefab_levels):
         world = mbd.World(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "managed_il"))
         for r in self.scene_roots(level): self.roots.append(rid(r)); self.gameobject(r, None)
         for pl in prefab_levels:
             for r in self.prefab_roots(pl, world): self.roots.append(rid(r)); self.gameobject(r, None)
-        json.dump({"objects": self.objects, "roots": self.roots}, open(os.path.join(self.out, "scene.json"), "w"))
+        lm, rs = self.settings(level)
+        json.dump({"objects": self.objects, "roots": self.roots, "lightmaps": lm["lightmaps"], "lightmapsMode": lm["mode"], "lightProbes": lm["lightProbes"], "render": rs},
+                  open(os.path.join(self.out, "scene.json"), "w"))
         json.dump({"materials": list(self.materials.values())}, open(os.path.join(self.out, "materials.json"), "w"))
         rep = {"gameobjects": len(self.objects), "roots": len(self.roots), "meshes": len(self.meshes), "textures": len(self.textures),
                "materials": len(self.materials), "renderers": sum(1 for o in self.objects if o["materials"]), **self.report}

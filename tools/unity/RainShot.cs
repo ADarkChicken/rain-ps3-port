@@ -1,6 +1,6 @@
 // Render preview images of an imported Rain scene headless (M1/M3 visual checks).
 //   Unity.exe -batchmode -quit -projectPath <proj> -executeMethod RainShot.Run -rainScenePath <Assets/...unity> -rainOut <dir>
-// Uses temporary flat ambient lighting (original lighting/lightmaps are not hooked up yet).
+// Uses the scene's own RenderSettings, lightmaps (RainLightmaps) and light probes (RainLightProbes); no preview lights.
 using System;
 using System.IO;
 using UnityEditor;
@@ -20,9 +20,8 @@ public static class RainShot
         foreach (var r in sc.GetRootGameObjects()) if (!r.activeSelf) { r.SetActive(true); activated++; }
         Debug.Log("RAIN SHOT: activated roots=" + activated);
         string outDir = Arg("-rainOut"); Directory.CreateDirectory(outDir);
-        RenderSettings.ambientMode = AmbientMode.Flat; RenderSettings.ambientLight = new Color(0.8f, 0.8f, 0.8f);
-        var lgo = new GameObject("PreviewLight"); var l = lgo.AddComponent<Light>(); l.type = LightType.Directional;
-        l.intensity = 0.6f; lgo.transform.rotation = Quaternion.Euler(50, -30, 0);
+        var lm = UnityEngine.Object.FindObjectOfType<RainLightmaps>(); if (lm != null) lm.Apply();
+        var lp = UnityEngine.Object.FindObjectOfType<RainLightProbes>(); if (lp != null) lp.Apply();
 
         Bounds b = new Bounds(); bool first = true; int n = 0;
         foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())

@@ -1,12 +1,13 @@
 """Emit Unity 2017.4 .shader files from Rain's Unity 3.5 PS3 ShaderLab scripts (M2).
 Usage: rsx2unity_shader.py <Media dir> <out dir>
 - ShaderLab structure (Properties, SubShader/Pass state, Tags, Blend/ZWrite/Cull/...) is kept verbatim.
-- Each `Program "vp"/"fp"` pair of a Pass is replaced by one CGPROGRAM: every original PS3 variant becomes keyword
-  RAINV_<n> of a single `#pragma multi_compile` (exactly the original variant set; the runtime bridge selects it).
+- Each `Program "vp"/"fp"` pair of a Pass is replaced by one CGPROGRAM holding every original PS3 variant, selected by
+  Unity 2017's own built-in keywords where the meaning is the same (see KW_*), so the engine picks the variant per pass,
+  renderer and light exactly as 3.5 did. Combinations 3.5 never compiled fall back to the most specific listed variant.
 - Microcode is translated by rsx2hlsl (exact RSX register model). Unity 2017 built-ins are used where the meaning is
   identical (matrices, camera, time, screen/projection params); all other uniforms keep their PS3 names.
 - Shader names are prefixed "RainPS3/" so they never collide with Unity's own built-in shaders.
-Writes <out>/<sanitized name>.shader and <out>/variants.json (per shader/pass: variant index -> PS3 keyword set)."""
+Writes <out>/<sanitized name>.shader and <out>/variants.json (per shader/pass: PS3 keyword set and 2017 keyword set per variant)."""
 import json, os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rsx2hlsl as R
@@ -44,6 +45,9 @@ RENAME = {"glstate_matrix_mvp": "UNITY_MATRIX_MVP", "glstate_matrix_modelview0":
           "_Object2World": "unity_ObjectToWorld", "_World2Object": "unity_WorldToObject",
           "glstate_lightmodel_ambient": "UNITY_LIGHTMODEL_AMBIENT", "unity_World2Shadow": "unity_WorldToShadow",
           "_CameraToWorld": "unity_CameraToWorld", "_WorldToCamera": "unity_WorldToCamera"}
+# 3.5 SH = ambient + light probes (+ non-important lights), evaluated by the engine per renderer; 2017 fills its own SH
+# from its own probes/ambient, so these are owned by the bridge (RainLightProbes sets them per renderer, E85)
+BRIDGED = {n: "rain_" + n[len("unity_"):] for n in ("unity_SHAr", "unity_SHAg", "unity_SHAb", "unity_SHBr", "unity_SHBg", "unity_SHBb", "unity_SHC")}
 COMPUTED = {"unity_Scale": "float4(1, 1, 1, 1.0 / length(unity_ObjectToWorld[0].xyz))"}
 ATTR = {"Vertex": "in_pos", "Normal": "in_normal", "Color": "in_diff_color", "SecondaryColor": "in_spec_color",
         "BlendWeight": "in_weight", "FogCoord": "in_fog", **{f"TexCoord{k}": f"in_tc{k}" for k in range(8)}}
@@ -54,6 +58,7 @@ CHANNEL_SEM = {"vertex": "POSITION", "normal": "NORMAL", "color": "COLOR", "tang
 def resolve(name, want):
     """PS3 uniform `name` of shape `want` ('float4', 'float4x4', 'float') -> (expression, declaration or None)."""
     if name in COMPUTED: return COMPUTED[name], None
+    if name in BRIDGED: return BRIDGED[name], f"float4 {BRIDGED[name]};"
     m = re.match(r"unity_LightColor(\d)$", name)
     if m and "unity_LightColor" in CAT: return f"unity_LightColor[{m.group(1)}]", None
     tgt = RENAME.get(name, name)
@@ -126,8 +131,13 @@ def variant_code(vsp, fsp, vi):
     frepl, fdecl = fp_uniforms(ft)
     samplers = {u: name for u, name, ty in fsp["textures"]}; stypes = {u: ty for u, name, ty in fsp["textures"]}
     body_f = subst(ft["lines"], frepl)
-    # samplers whose names Unity declares itself (e.g. unity_Lightmap as Texture2D+SamplerState) get a rain_ prefix;
-    # the runtime bridge binds them under that name
+    # unity_Lightmap: same texture in 2017 (engine-bound per renderer, Texture2D+SamplerState) -> sample Unity's own (E84)
+    for u, n in list(samplers.items()):
+        if n == "unity_Lightmap":
+            body_f = [re.sub(rf"\btex2D\(_tex{u},", "UNITY_SAMPLE_TEX2D(unity_Lightmap,", l) for l in body_f]
+            if any(re.search(rf"\b_tex{u}\b", l) for l in body_f): raise R.Unsupported("unity_Lightmap sampled with non-tex2D op")
+            del samplers[u]
+    # other samplers whose names Unity declares itself get a rain_ prefix; the runtime bridge binds them under that name
     samplers = {u: ("rain_" + n if (n in TEXCAT or n in CAT) else n) for u, n in samplers.items()}
     for u, name in samplers.items(): body_f = [re.sub(rf"\b_tex{u}\b", name, l) for l in body_f]
     decl = set(vdecl) | fdecl
@@ -177,6 +187,32 @@ def pair_variants(vps, fps):
     if not pairs: raise R.Unsupported("no VP/FP combination")
     return pairs
 
+# 3.5 -> 2017 keyword bridge (E84). *_OFF keywords mean "absent" in 2017.
+KW_DROP = {"SHADOWS_NATIVE", "SHADOWS_SPLIT_SPHERES"}     # D3D11 shadow maps are always native; split spheres is engine-side in 2017
+KW_NEVER = {"SHADOWS_NONATIVE", "DIRLIGHTMAP_ON"}         # no 2017 equivalent (Rain uses dual, not directional, lightmaps: E83)
+KW_RENAME = {"HDR_LIGHT_PREPASS_ON": "UNITY_HDR_ON"}
+KW_GROUPS = [["POINT", "DIRECTIONAL", "SPOT", "POINT_COOKIE", "DIRECTIONAL_COOKIE"], ["SHADOWS_SCREEN", "SHADOWS_DEPTH", "SHADOWS_CUBE"]]
+
+def keyword_select(variants):
+    """3.5 keyword lists -> (pragma lines, [(variant index, 2017 keyword set)] most specific first). Variants without a 2017
+    equivalent are dropped; if two map to the same set the first wins."""
+    mapped, seen = [], []
+    for vi, kws in enumerate(variants):
+        if any(k in KW_NEVER for k in kws): continue
+        ks = frozenset(KW_RENAME.get(k, k) for k in kws if k and not k.endswith("_OFF") and k not in KW_DROP)
+        if ks not in seen: seen.append(ks); mapped.append((vi, ks))
+    if not mapped: mapped = [(0, frozenset())]
+    always = frozenset.intersection(*[ks for _, ks in mapped]); switches = set().union(*[ks for _, ks in mapped]) - always
+    pragmas = []
+    for g in KW_GROUPS:
+        mem = [k for k in g if k in switches]
+        if mem:
+            none = any(not (ks & set(mem)) for _, ks in mapped)
+            pragmas.append("#pragma multi_compile " + ("__ " if none else "") + " ".join(mem)); switches -= set(mem)
+    pragmas += [f"#pragma multi_compile __ {k}" for k in sorted(switches)]
+    order = sorted(mapped, key=lambda m: -len(m[1] - always))
+    return pragmas, [(vi, ks - always) for vi, ks in order], always
+
 def block_end(text, open_idx):
     """Index just past the '}' matching the '{' at open_idx (braces inside "..." strings are ignored)."""
     depth, i, inq = 0, open_idx, False
@@ -225,19 +261,21 @@ def convert_shader(script, prefix="RainPS3/"):
             approximated.append(f"pass {pass_no}: lone {list(progs)[0]} program dropped (fixed-function kept)"); pass_no += 1
             continue
         pairs = pair_variants(progs["vp"], progs["fp"])
-        kws = " ".join(f"RAINV_{j}" for j in range(len(pairs)))
+        pragmas, order, always = keyword_select([v["keywords"] for v, f in pairs])
         cg = ["CGPROGRAM", "// UNITY_SHADER_NO_UPGRADE  (names are mapped explicitly by rsx2unity_shader.py)",
               "#pragma target 4.0", "#pragma vertex rain_vert", "#pragma fragment rain_frag"]
-        if len(pairs) > 1: cg.append(f"#pragma multi_compile {kws}")
+        cg += pragmas
         cg += ["#include \"UnityCG.cginc\"", "#include \"UnityLightingCommon.cginc\"", R.FP_HELPERS]
-        for vi, (v, f) in enumerate(pairs):
-            L, dcl = variant_code(v, f, vi)
-            if len(pairs) > 1: cg.append(("#if" if vi == 0 else "#elif") + f" defined(RAINV_{vi})")
+        for n, (vi, ks) in enumerate(order):
+            v, f = pairs[vi]; L, dcl = variant_code(v, f, vi)
+            cond = " && ".join(f"defined({k})" for k in sorted(ks))
+            if len(order) > 1: cg.append(("#if " if n == 0 else "#elif " if cond else "#else") + cond + f"   // 3.5: {' '.join(v['keywords'])}")
             cg += sorted(dcl) + L
-        if len(pairs) > 1: cg.append("#endif")
+        if len(order) > 1: cg.append("#endif")
         cg.append("ENDCG")
         pieces.append(NL.join(cg) + NL)
-        variants_info.append({"pass": pass_no, "variants": [v["keywords"] for v, f in pairs]}); pass_no += 1
+        variants_info.append({"pass": pass_no, "variants": [v["keywords"] for v, f in pairs],
+                              "unity": {str(vi): sorted(ks | always) for vi, ks in order}}); pass_no += 1
     pieces.append(out[pos:])
     return name, "".join(pieces), {"passes": variants_info, "approximated": approximated}
 
