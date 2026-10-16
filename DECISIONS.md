@@ -12,4 +12,6 @@
 | D6 | 2026-10-15 | Phase 3 subsystem = "AOT code readability" (GOT/PLT/relocs) + 1 PoC class, then bounded checks of data (MonoBehaviour) and shader (RSX FP) decoding | Highest-impact unknown from Phase 2; each check generalised to the whole game for a measurable coverage figure | Starting with gameplay subsystems before tooling (would be slow and error-prone) |
 | D7 | 2026-10-15 | Mono reference = upstream mono/mono@8219a5b (v67) rather than Unity's public 2.6 branches (v66) | Exact struct/symbol match with binary | Unity 3.x branches (version mismatch) |
 
+| D8 | 2026-10-16 | Retail binaries (decrypted with the owner's RAP, `work/retail_elf/`) become the canonical analysis input; existing FIX-based maps stay valid | E62: code byte-identical; only SDK-version header fields differ | Keep FIX as canonical (equivalent, but retail is the authentic artifact) |
+
 Pending user decisions: see FEASIBILITY.md §5.

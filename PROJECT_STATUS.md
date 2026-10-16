@@ -1,14 +1,14 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-10-15 (clean-shutdown checkpoint).
+Last updated: 2026-10-16 (owner's rip verified).
 
 ## Where we are
 **Phase 4 (port architecture & planning): plan written, AWAITING APPROVAL.**
 **Exact next action:** get the user's approval of `PORTING_PLAN.md`, especially §2 (engine-host decision process) and §9
 (milestone M0). Then start M0 item 1. Each M0 item that installs software (Unity editor) or drives RPCS3's debugger needs
 an explicit OK first. Do not start implementation before approval.
-**Pending from the user:** a rip / RAP of their own console copy, used to decrypt the retail binaries and diff them
-against the FIX build (E50).
+**Done 2026-10-16:** owner's rip (`..\BASE GAME CLEAN\`, PKG + RAP) verified; retail binaries decrypted to
+`work/retail_elf/` (canonical, D8); code identical to FIX except 2 SDK-version fields (E61, E62).
 
 ## Completed and verified (details + evidence IDs in EVIDENCE.md)
 | Phase | Result | Evidence |
@@ -25,13 +25,13 @@ against the FIX build (E50).
 - 211 generic TypeSpec/MethodSpec names (E32); 4 MonoBehaviour classes not exact (E57).
 - Ghidra annotation only done for Assembly-CSharp (other 3 assemblies have CSV maps but no Ghidra import yet).
 - Optional, offered: restore the original `title_flow.mp4` in the RPCS3 install (removes the repack splash).
-- Owner's RAP → retail decrypt + diff (E50).
+- Optional: switch the RPCS3 install to pure retail (RAP in exdata + retail EBOOT/files), removing the repack's splash.
 
 ## Environment needed to resume (verified 2026-10-15)
 | Component | Version / path | Used for |
 |---|---|---|
 | Workspace | `G:\Decomp\Rain\DECOMP` (git, remote `origin` = github.com/ADarkChicken/rain-ps3-port, **public**) | everything |
-| Original game files | `G:\Decomp\Rain\BASE GAME\Rain.pkg`, `RAIN_NPUA80719_FIX_421.pkg` (read-only, never modified) | source |
+| Original game files | `G:\Decomp\Rain\BASE GAME\Rain.pkg`, `RAIN_NPUA80719_FIX_421.pkg`; owner's rip `G:\Decomp\Rain\BASE GAME CLEAN\` (PKG + RAP); all read-only, never modified | source |
 | Python | 3.14.5, venv `tools\.venv` (pycryptodome 4.0.0, capstone 5.0.9, dnfile 0.18.0: `tools/requirements.txt`) | all tools |
 | Crypto constants | `tools\keys.local.json` (local only, git-ignored; template `tools/keys.example.json`) | pkg/sdat/self/klic/prx tools |
 | Ghidra | 12.1.4 at `%USERPROFILE%\tools\ghidra_12.1.4_PUBLIC`, JDK 21.0.12 (Eclipse Adoptium) | native analysis |
@@ -46,6 +46,7 @@ against the FIX build (E50).
 ```
 # Python tools (always from DECOMP\, isolated mode)
 tools/.venv/Scripts/python -I tools/<tool>.py ...
+tools/.venv/Scripts/python -I tools/rap2klic.py <file.rap> > work/license/rif_key.hex   # then self_decrypt.py --klic <hex>
 bash tools/reproduce_phase1.sh        # extract PKGs, decrypt IL + FIX binaries (outputs must not pre-exist)
 bash tools/reproduce_phase3.sh        # exports → method map → GOT/PLT decode → MonoBehaviour decode (Assembly-CSharp)
 # Ghidra headless (project ghidra\probe)
@@ -70,7 +71,8 @@ powershell -File tools\rpcs3_window_capture.ps1 -Out <png>                # capt
 | `work/poc/*.cs`, `*.hlsl` | reconstructed classes, translated shader | yes |
 | `work/poc/*.decomp.txt`, `*.asm.txt` | decompiler/disassembly dumps | no |
 | `work/maps/` | per-assembly method/GOT/PLT/relocs/exports CSVs, closure, decode summary | only `monobehaviour_decode_summary.csv` |
-| `work/managed_il/`, `work/fix_elf/` | decrypted IL / PPC64 binaries | no |
+| `work/managed_il/`, `work/fix_elf/`, `work/retail_elf/` | decrypted IL / PPC64 binaries (retail = canonical) | no |
+| `work/license/` | RAP-derived key (personal license material) | no |
 | `work/rpcs3_logs/` | RPCS3 session/install logs + 2 window captures | no |
 | `extracted/` | raw PKG contents (2.1 GB) | no |
 

@@ -27,7 +27,7 @@ Paths relative to `DECOMP/`. Originals in `../BASE GAME/` are never written.
 | E11 | IL metadata intact: Assembly-CSharp has 1305 types, 13951 fields, 8490 methods, 295 properties; UnityEngine.dll.mdb (debug symbols) shipped | V | REA `inspect_managed_members` summary |
 | E12 | AOT images belong to the same build as retail IL: each `*.dll.prx` embeds its assembly's exact MVID (e.g. Assembly-CSharp `70F9671C-C082-4EEC-9E63-E46AB33DF7DC`) | V | GUID string match |
 | E13 | AOT PRX text is valid PPC64-BE (99.96% decode); e_type 0xFFA4 (SCE PRX); no named `mono_aot_*` symbols inside the PRX | V | capstone sweep |
-| E14 | FIX binaries are functionally the retail build re-signed (sizes of decrypted AOT ≈ retail SPRX file sizes; MVID match) | I (high) | E12 + size comparison; retail SPRX cannot be decrypted to diff |
+| E14 | **Verified (E62)**: FIX binaries are the retail build: all 25 SPRX byte-identical after decryption; EBOOT differs only in 2 SDK-version header fields | V | retail decrypted with owner's RAP |
 | E15 | Native plugins: `ShroudUnityPlugin.prx` (2.4 MB, purpose U), `RainPS3Utility.prx` (6.5 KB), `PRXManager.prx` | V (exist) / U (role) | listing |
 
 ## Assets
@@ -91,9 +91,15 @@ Paths relative to `DECOMP/`. Originals in `../BASE GAME/` are never written.
 | E46 | At runtime the Unity player calls `sceNpDrmIsAvailable(k_licensee=*0x9ebbba, path)` before each SPRX load; with that klic RPCS3 **loads all 21 game PRX** (PRXManager, all Managed/*.sprx + .b.sprx, RainPS3Utility). The ahead-of-time "Failed to decrypt" SELF errors are only RPCS3's precompile pass (no klic yet) | V | RPCS3 log `sys_prx: Loaded module` lines |
 | E47 | Game opens mainData, level0, sharedassets0/1; ENOENT only on optional probes (`*.sdat`, `*.resS/.resG/.res`, mono gac policy, `.config`) — benign Unity/Mono fallbacks | V | RPCS3 log `sys_fs_open` |
 | E48 | Emulation runs at a stable 30 FPS (window title) 2.5 min in; no fatal errors; ShroudUnityPlugin not yet loaded at that point. User observation: game shows its first-run "adjust the screen display area" screen, so in-game UI renders | V (FPS, no fatal, UI shown) / U (gameplay) | window title, log, user report |
-| E50 | FIX pkg is **not** a pure re-sign: besides EBOOT/SPRX it replaces `Media/Raw/Movies/title_flow.mp4` (retail 12,374,853 B sha1 370214f5… → 5,617,987 B 79978974…, shows a repack-group splash, user-observed), `PARAM.SFO` and `KEYFILE.EDAT`. ICON0/PS3LOGO identical. ⇒ FIX code modules may also differ from retail beyond re-signing (E14 stays an inference until retail binaries can be decrypted, e.g. with the owner's RAP) | V (file diffs, user report) | sha1/size comparison |
+| E50 | FIX pkg is **not** a pure re-sign: besides EBOOT/SPRX it replaces `Media/Raw/Movies/title_flow.mp4` (retail 12,374,853 B sha1 370214f5… → 5,617,987 B 79978974…, shows a repack-group splash, user-observed), `PARAM.SFO` and `KEYFILE.EDAT`. ICON0/PS3LOGO identical. Code question resolved by E62 (no code changes); the content swaps remain for the RPCS3 install | V (file diffs, user report) | sha1/size comparison |
 | E51 | Session 1 (12 min 26 s, user-closed, clean quit, no fatal): ShroudUnityPlugin loaded at runtime; game streamed many scenes (level0–4, 12, 20–25, 61, 68–73 + matching sharedassets) → gameplay reached. Errors during play are only optional-file probes and RPCS3 code-analysis notices; no RSX/SPU/audio errors. Log kept locally: `work/rpcs3_logs/session1_RPCS3.log` | V | RPCS3 log |
 | E49 | RPCS3 exposes a GDB stub on 127.0.0.1:2345 during emulation → usable for runtime breakpoints / memory inspection (behavioural oracle) | V (listening) / U (usability with this build) | RPCS3 log |
+
+## Retail verification (2026-10-16)
+| ID | Finding | Conf | Method |
+|----|---------|------|--------|
+| E61 | Owner's rip (`BASE GAME CLEAN/`): PKG byte-identical to `BASE GAME/Rain.pkg` (sha1 0881bcce…); RAP for `UP9000-NPUA80719_00-RAIN000000000001` (16 B). RAP → NPDRM key per RPCS3 `rap_to_rif` (`tools/rap2klic.py`); key passes the strict metadata check on retail EBOOT and SPRX; all 26 retail binaries decrypt (`work/retail_elf/`). Derived key kept only in git-ignored `work/license/` | V | sha1, klic_check, self_decrypt |
+| E62 | Retail vs FIX after decryption: **25/25 SPRX byte-identical**; EBOOT differs in exactly 2 bytes = `sdk_version` in `sys_process_param` (@0xC12900) and `sys_process_prx_param` (@0xC12928): retail 0x00430001 (SDK 4.30) → FIX 0x00340001 (3.40), a firmware-compatibility patch. **No code changed** ⇒ all analysis done on FIX binaries applies unchanged to retail | V | segment/byte diff |
 
 ## Tooling capability (this host)
 | ID | Finding | Conf |
