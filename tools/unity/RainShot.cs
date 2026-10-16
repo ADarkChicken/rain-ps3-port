@@ -16,9 +16,11 @@ public static class RainShot
     public static void Run()
     {
         var sc = EditorSceneManager.OpenScene(Arg("-rainScenePath"));
-        // Preview only: activate every root to simulate all streamed map chunks being loaded (scene asset is not saved).
+        // Preview only: simulate all streamed map chunks being loaded (scene asset is not saved). Chunks are stored inactive at
+        // every level (3.5 active flags are per object, E86), so activate each inactive root with its whole subtree.
         int activated = 0;
-        foreach (var r in sc.GetRootGameObjects()) if (!r.activeSelf) { r.SetActive(true); activated++; }
+        foreach (var r in sc.GetRootGameObjects())
+            if (!r.activeSelf) { foreach (var t in r.GetComponentsInChildren<Transform>(true)) t.gameObject.SetActive(true); activated++; }
         Debug.Log("RAIN SHOT: activated roots=" + activated);
         string outDir = Arg("-rainOut"); Directory.CreateDirectory(outDir);
         var lm = UnityEngine.Object.FindObjectOfType<RainLightmaps>(); if (lm != null) lm.Apply();
