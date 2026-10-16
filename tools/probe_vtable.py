@@ -29,39 +29,64 @@ def main():
     by_addr = {base + int(r["address"], 16): f'{r["type"]}::{r["method"]}({r["params"]}) {r["token"]}' for r in rows}
     lines = [f"Assembly-CSharp code base {base:#x}; breakpoint at {base + off:#x}"]
     g = RSP()
+    bp = base + off
     lines.append(f"halt reason: {g.halt_reason()}")
-    lines.append(f"set bp: {g.bp(base + off)}")
+    lines.append(f"set bp: {g.bp(bp)}")
     print("waiting for breakpoint hit (play into the game if needed)...", flush=True)
-    lines.append(f"stop: {g.cont()}")
-    pc, this = g.reg(64), g.reg(3)
-    lines.append(f"pc={pc:#x} this(r3)={this:#x}")
+    try:
+        lines.append(f"stop: {g.cont()}")
+        pc = g.reg(64)
+        lines.append(f"selected thread {g.cmd('qC')} pc={pc}")
+        if pc != bp:   # find the thread that is sitting on the breakpoint
+            ids = [t for t in g.cmd("qfThreadInfo")[1:].split(",") if t]
+            for t in ids:
+                if g.cmd(f"Hg{t}") == "OK" and g.reg(64) == bp:
+                    lines.append(f"breakpoint thread = {t}"); pc = bp; break
+        if pc != bp:
+            lines.append("ERROR: no thread stopped at the breakpoint; nothing dumped")
+        else:
+            this = g.reg(3)
+            lines.append(f"pc={pc:#x} this(r3)={this:#x} lr={g.reg(67):#x}")
+            dump(g, this, by_addr, lines)
+    except Exception as e:
+        lines.append(f"ERROR during probe: {type(e).__name__}: {e}")
+    finally:
+        try:
+            lines.append(f"remove bp: {g.bp(bp, False)}")
+            g.cmd("vCont;c", expect_reply=False)
+            lines.append("resumed emulation")
+        except Exception as e:
+            lines.append(f"ERROR while resuming: {e}")
+        open(out, "w").write("\n".join(lines) + "\n")
+        print("\n".join(lines), flush=True)
+    # RPCS3's GDB server has no detach and crashes on a dropped connection: keep it open until RPCS3 exits.
+    print("holding connection open until RPCS3 exits...", flush=True)
+    try:
+        while g.s.recv(1): pass
+    except Exception: pass
+
+def dump(g, this, by_addr, lines):
     obj = g.mem(this, 0x34)
     lines.append("RegionBox object: " + obj.hex(" ", 4))
     vt = struct.unpack(">I", obj[0:4])[0]
     arr = struct.unpack(">I", obj[0x10:0x14])[0]
     count = struct.unpack(">i", obj[0x2C:0x30])[0]
     lines.append(f"vtable(RegionBox)={vt:#x} trigger_array={arr:#x} m_Count={count}")
-    if arr and count > 0:
-        alen = g.u32(arr + 0xC); el = g.u32(arr + 0x10)
-        lines.append(f"array length={alen} element0={el:#x}")
-        evt = g.u32(el)
-        klass = g.u32(evt)
-        lines.append(f"element vtable={evt:#x} (MonoVTable.klass={klass:#x})")
-        raw = g.mem(evt, 0xD0)
-        lines.append("vtable header: " + raw[:0x18].hex(" ", 4))
-        for o in range(0x18, 0xD0, 4):
-            i = o
-            v = struct.unpack(">I", raw[o: o + 4])[0]
-            name = by_addr.get(v)
-            if name is None and v:
-                try:  # function descriptor (OPD): first word = code address
-                    c = g.u32(v); name = ("OPD-> " + by_addr[c]) if c in by_addr else None
-                except Exception: pass
-            lines.append(f"  +{o:#04x} = {v:#010x}  {name or ''}")
-    g.bp(base + off, False)
-    lines.append(f"detach/continue: {g.cmd('vCont;c', expect_reply=False)}")
-    open(out, "w").write("\n".join(lines) + "\n")
-    print("\n".join(lines))
+    if not (arr and count > 0): return
+    alen = g.u32(arr + 0xC); el = g.u32(arr + 0x10)
+    lines.append(f"array length={alen} element0={el:#x}")
+    evt = g.u32(el); klass = g.u32(evt)
+    lines.append(f"element vtable={evt:#x} (MonoVTable.klass={klass:#x})")
+    raw = g.mem(evt, 0xD0)
+    lines.append("vtable header: " + raw[:0x18].hex(" ", 4))
+    for o in range(0x18, 0xD0, 4):
+        v = struct.unpack(">I", raw[o: o + 4])[0]
+        name = by_addr.get(v)
+        if name is None and v:
+            try:
+                c = g.u32(v); name = ("OPD-> " + by_addr[c]) if c in by_addr else None
+            except Exception: pass
+        lines.append(f"  +{o:#04x} = {v:#010x}  {name or ''}")
 
 if __name__ == "__main__":
     main()

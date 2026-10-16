@@ -13,5 +13,6 @@
 | D7 | 2026-10-15 | Mono reference = upstream mono/mono@8219a5b (v67) rather than Unity's public 2.6 branches (v66) | Exact struct/symbol match with binary | Unity 3.x branches (version mismatch) |
 
 | D8 | 2026-10-16 | Retail binaries (decrypted with the owner's RAP, `work/retail_elf/`) become the canonical analysis input; existing FIX-based maps stay valid | E62: code byte-identical; only SDK-version header fields differ | Keep FIX as canonical (equivalent, but retail is the authentic artifact) |
+| D9 | 2026-10-16 | Engine host: **Unity 2017.4 LTS** (40f1) replaces the 4.7 candidate | 4.7 activation impossible (E70); 2017.4 is the last Unity with legacy particles + .NET 3.5 runtime, x64, Hub activation | 4.7 (blocked), 5.6 (no advantage), modern LTS (more API loss) |
 
 Pending user decisions: see FEASIBILITY.md §5.
