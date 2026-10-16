@@ -1,19 +1,18 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-10-16 (M0 complete).
+Last updated: 2026-10-16 (M0 complete; M1 core + M2 compile done).
 
 ## Where we are
-**Phase 5, milestone M0: COMPLETE (2026-10-16). Next milestones M1/M2 await the user's go-ahead.**
-| M0 item | Result | Evidence |
+**Phase 5: M0 COMPLETE; M1 core pipeline and M2 shader compile COMPLETE (2026-10-16, user approved M1+M2).**
+| Item | Result | Evidence |
 |---|---|---|
-| 1 Host | Unity 4.7 rejected (activation impossible) → **Unity 2017.4.40f1** (D9): activated, empty x64 D3D11 player builds and runs | E70–E72 |
-| 2 Skeleton | 4 assemblies + PS3 shims compile **inside Unity 2017.4** with 0 errors (asmdef split); 21,940/21,940 members identical | E64, E73 |
-| 3 RPCS3 probe | Retail build + RAP in RPCS3; GDB harness; **vtable layout resolved** (reverse declaration order) | E66, E68, E69 |
-| 4 Slice scene | Stage 1 opening, starting with `st01_Prefab_A1` (level21) | E67 |
+| M0 Host | **Unity 2017.4.40f1** (D9), x64 D3D11 player builds/runs; skeleton + PS3 shims compile; vtable layout resolved | E63–E73 |
+| M1 Assets | Class readers byte-exact on all objects; DXT native; Stage 1 exported (4,238 GOs, 2,075 renderers, 809 meshes, 134 mats, 110 tex) and imported into Unity with identical counts; coherent render | E74–E78 |
+| M2 Shaders | 1,282/1,282 RSX programs → HLSL compile (d3dcompiler); 183/183 shaders → ShaderLab, all supported in Unity, 0 errors, x64 build OK | E79–E82 |
 
-**Exact next action:** ask the user to approve M1 (asset conversion: Texture2D/Mesh/Material/GameObject/Transform/renderers for
-level21) and M2 (`rsx2hlsl` over all 892 FP + 390 VP), which can run in parallel (PORTING_PLAN §5–6).
-**Housekeeping:** hosts file restored (only the original UTF-8 BOM differs; backup `hosts.bak-rain`); Unity 4.7 can be uninstalled.
+**Exact next action:** remaining M1 items — bind imported materials to the converted `RainPS3/*` shaders, lightmaps (dual: unity_Lightmap/Ind/Fade), render settings; then ask approval for M3 (runtime uniform/keyword bridge: RAINV_n selection from 3.5 keywords, unity_Scale, rain_* samplers, custom uniforms via SetVector; golden-image comparison vs RPCS3).
+**Local-only artefacts:** `work/export/st01`, `work/unity_shaders6` (generated shaders, game-derived — never commit), Unity project `G:/Decomp/Rain/port_unity`.
+**Housekeeping:** hosts file restored (backup `hosts.bak-rain`); Unity 4.7 removal approved by user.
 
 ## Completed and verified (details + evidence IDs in EVIDENCE.md)
 | Phase | Result | Evidence |

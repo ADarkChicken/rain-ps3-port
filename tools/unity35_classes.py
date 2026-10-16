@@ -88,7 +88,9 @@ def mesh(r):
     d["collisionTriangles"] = r.vec(r.u32); d["collisionVertexCount"] = r.i32()
     return d
 
-READERS = {43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material}
+def shader(r): return {"name": r.string(), "script": r.string(), "dependencies": r.vec(r.pptr)}
+
+READERS = {48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material}
 
 def validate(media, cids, dump=0):
     files = sorted(glob.glob(os.path.join(media, "level*"))) + sorted(glob.glob(os.path.join(media, "*.assets"))) \
