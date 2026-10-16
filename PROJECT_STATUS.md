@@ -1,6 +1,6 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-10-17 (M3 in progress: keyword bridge, lightmaps, light probes done).
+Last updated: 2026-10-17 end of day (M3 in progress; clean checkpoint, all work committed locally).
 
 ## Where we are
 **Phase 5: M0, M1, M2 (compile) COMPLETE; M3 (VS-1) IN PROGRESS (approved 2026-10-17; defaults: static scene only, poses from the opening of Stage 1, threshold set after first captures).**
@@ -65,6 +65,29 @@ bash tools/reproduce_phase3.sh        # exports → method map → GOT/PLT decod
 # RPCS3
 rpcs3.exe --no-gui "<RPCS3>\dev_hdd0\game\NPUA80719\USRDIR\EBOOT.BIN"     # log: <RPCS3>\log\RPCS3.log (overwritten each launch)
 powershell -File tools\rpcs3_window_capture.ps1 -Out <png>                # captures ONLY the RPCS3 window (PrintWindow)
+```
+### M1–M3 pipeline (bash, from DECOMP/; U=../_tools/Unity-2017.4.40f1/Editor/Unity.exe, P=G:/Decomp/Rain/port_unity)
+```
+# 1 export Stage 1 (st01 = level4 + 41 st01_Prefab_* registries)
+PL=$(grep "st01_Prefab_" work/maps/level_names.txt | cut -f1 | tr '\n' ' ')
+tools/.venv/Scripts/python -I tools/rain_export.py extracted/Rain/USRDIR/Media work/export/st01 level4 $PL
+# 2 shaders (only after generator changes; keep the .meta files in Assets/RainShaders)
+tools/.venv/Scripts/python -I tools/rsx2unity_shader.py extracted/Rain/USRDIR/Media work/unity_shaders7
+cp work/unity_shaders7/*.shader $P/Assets/RainShaders/
+# 3 sync scripts into the Unity project (source of truth is tools/unity/; BuildM0.cs is not used there)
+cp tools/unity/Rain*.cs $P/Assets/Editor/ ; cp tools/unity/Runtime/*.cs $P/Assets/RainRuntime/
+# 4 import (delete $P/Assets/Rain/st01 first), checks, renders
+$U -batchmode -quit -projectPath $P -executeMethod RainImport.Run -rainExport <abs DECOMP>/work/export/st01 -rainScene st01 -logFile <log>
+$U -batchmode -quit -projectPath $P -executeMethod RainShaderDiag.Run -logFile <log>                        # expect withError=0
+$U -batchmode -quit -projectPath $P -executeMethod RainShaderBuildCheck.Run -rainOut <dir> -logFile <log>   # x64 player, all variants
+$U -batchmode -quit -projectPath $P -executeMethod RainShot.Run -rainScenePath Assets/Rain/st01/st01.unity -rainOut <dir> [-rainPoses work/rpcs3_logs/campose/poses.jsonl]
+# 5 golden capture session (user plays; RPCS3 must use the interpreter config; slow)
+rpcs3.exe --no-gui --config work/rpcs3_cfg/config_probe.yml "<RPCS3>/dev_hdd0/game/NPUA80719/USRDIR/EBOOT.BIN"   (run in background)
+#   once the user is in game: copy the log (Python cannot open the live one), start the probe in background
+cp "<RPCS3>/log/RPCS3.log" work/rpcs3_logs/campose/rpcs3_snapshot.log
+tools/.venv/Scripts/python -I -u tools/probe_campose.py work/rpcs3_logs/campose/rpcs3_snapshot.log work/rpcs3_logs/campose
+#   per pose: user stands still -> echo <label> > work/rpcs3_logs/campose/capture.req -> wait for <label>.done -> tell user they may move
+#   end: user closes RPCS3, then kill the probe process (it keeps the GDB connection open on purpose, E69)
 ```
 
 ## Workspace layout
