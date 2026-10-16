@@ -2,7 +2,7 @@
 Usage: probe_campose.py <rpcs3.log> <out dir>
 Lets the game run; whenever <out dir>/capture.req appears (its text = label) it interrupts, breaks in
 CameraConstrainForRainEffect.OnPreCull (copies the main camera's world pose every frame, work/poc), reads
-position/rotation/aspect/near/far/fov, resumes, captures the RPCS3 window and appends to <out dir>/poses.jsonl.
+position/rotation/aspect/near/far/fov, captures the RPCS3 window while still paused, resumes and appends to <out dir>/poses.jsonl.
 The .req file is renamed to <label>.done. Never closes the connection (RPCS3's stub crashes on a drop, E69)."""
 import json, os, struct, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -50,11 +50,12 @@ def main():
         g.s.sendall(b"\x03"); print("interrupted:", g._read_packet(), flush=True)
         try: pose = dict(label=label, **capture(g, base))
         except Exception as e: pose = {"label": label, "error": f"{type(e).__name__}: {e}"}
-        g.cmd("vCont;c", expect_reply=False)
-        time.sleep(1.5)   # let a frame render after the pause
+        # capture while still paused: the window shows the last presented frame, i.e. the pose just read (E86: capturing
+        # after resuming let the camera move after the multi-second pause)
         png = os.path.join(out, label + "_rpcs3.png")
         subprocess.run(["powershell", "-NoProfile", "-File", os.path.join(here, "rpcs3_window_capture.ps1"), "-Out", png])
         pose["window_capture"] = png
+        g.cmd("vCont;c", expect_reply=False)
         with open(os.path.join(out, "poses.jsonl"), "a") as f: f.write(json.dumps(pose) + "\n")
         os.replace(req, os.path.join(out, label + ".done"))
         print(json.dumps(pose), flush=True)
