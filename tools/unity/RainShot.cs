@@ -1,5 +1,6 @@
 // Render preview images of an imported Rain scene headless (M1/M3 visual checks).
 //   Unity.exe -batchmode -quit -projectPath <proj> -executeMethod RainShot.Run -rainScenePath <Assets/...unity> -rainOut <dir>
+//     [-rainPoses <poses.jsonl from tools/probe_campose.py>]  -> also <label>_port.png per captured RPCS3 camera pose
 // Uses the scene's own RenderSettings, lightmaps (RainLightmaps) and light probes (RainLightProbes); no preview lights.
 using System;
 using System.IO;
@@ -44,7 +45,21 @@ public static class RainShot
         cgo.transform.position = b.center + new Vector3(-b.size.x * 0.35f, b.size.magnitude * 0.25f, -b.size.z * 0.35f);
         cgo.transform.LookAt(b.center);
         Save(cam, Path.Combine(outDir, "overview_persp.png"));
+        // 3: golden-image poses captured from RPCS3
+        string poses = Arg("-rainPoses");
+        if (poses == null) return;
+        foreach (var line in File.ReadAllLines(poses))
+        {
+            var p = JsonUtility.FromJson<Pose>(line);
+            if (p.position == null || p.position.Length != 3) { Debug.Log("RAIN SHOT skip pose " + p.label); continue; }
+            cgo.transform.position = new Vector3(p.position[0], p.position[1], p.position[2]);
+            cgo.transform.rotation = new Quaternion(p.rotation[0], p.rotation[1], p.rotation[2], p.rotation[3]);
+            cam.fieldOfView = p.fov; cam.nearClipPlane = p.near; cam.farClipPlane = p.far; cam.aspect = p.aspect;
+            Save(cam, Path.Combine(outDir, p.label + "_port.png"));
+        }
     }
+
+    [Serializable] class Pose { public string label; public float[] position; public float[] rotation; public float aspect, near, far, fov; }
 
     static void Save(Camera cam, string path)
     {
