@@ -2,7 +2,7 @@
 Usage: probe_campose.py <rpcs3.log> <out dir>
 Lets the game run; whenever <out dir>/capture.req appears (its text = label) it interrupts, breaks in
 CameraConstrainForRainEffect.OnPreCull (copies the main camera's world pose every frame, work/poc), reads
-position/rotation/aspect/near/far/fov, captures the RPCS3 window while still paused, resumes and appends to <out dir>/poses.jsonl.
+position/rotation/aspect/near/far/fov plus the view/projection matrices of the camera actually rendering, captures the RPCS3 window while still paused, resumes and appends to <out dir>/poses.jsonl.
 The .req file is renamed to <label>.done. Never closes the connection (RPCS3's stub crashes on a drop, E69)."""
 import json, os, struct, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -11,6 +11,9 @@ from probe_vtable import wait_base
 
 # call sites inside OnPreCull (file addresses, work/poc/CameraConstrainForRainEffect.decomp.txt)
 SET_LOCALROTATION = 0x56E0C   # r4..r7 = rotation; world position still at r1+0x8c (passed to set_localPosition)
+# IlluminationCameraController.OnPreCull (on IlluminationMaskCamera) copies the camera actually rendering -- the main
+# camera, or CutSceneManager.GetCutSceneCamera() while a cutscene plays (E87) -- right after get_projectionMatrix:
+MATRIX_SITE = 0x5B15C         # worldToCameraMatrix at r1+0xC0, projectionMatrix at r1+0x80 (Matrix4x4, column-major)
 F1_SITES = [("aspect", 0x56E7C), ("near", 0x56EA8), ("far", 0x56ED4), ("fov", 0x56F00)]   # setter arg in f1
 
 def f32(bits): return struct.unpack(">f", struct.pack(">I", bits & 0xFFFFFFFF))[0]
@@ -35,6 +38,8 @@ def capture(g, base):
     pose = {"position": list(pos), "rotation": rot}
     for name, off in F1_SITES:
         hit(g, base + off); pose[name] = f64(g.reg(33))
+    hit(g, base + MATRIX_SITE); sp = g.reg(1)
+    pose["view"] = list(struct.unpack(">16f", g.mem(sp + 0xC0, 64))); pose["proj"] = list(struct.unpack(">16f", g.mem(sp + 0x80, 64)))
     return pose
 
 def main():

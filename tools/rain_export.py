@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import unity_inventory as u
 import unity35_classes as c
 import unity_mb_decode as mbd
+import dxt
 
 CH_SIZE = {0: 12, 1: 12, 2: 4, 3: 8, 4: 8, 5: 16}
 
@@ -50,6 +51,7 @@ def write_dds(path, d, data):
     mips = 1
     if d["mipMap"]:
         while (w >> mips) or (h >> mips): mips += 1
+    data = dxt.flip_v(data, w, h, fmt, mips)   # 3.5 rows are bottom-up, DDS is top-down (E87)
     if fourcc:
         bs = 8 if fmt == 10 else 16; linear = max(1, (w + 3) // 4) * max(1, (h + 3) // 4) * bs
         pf = struct.pack("<II4sIIIII", 32, 0x4, fourcc, 0, 0, 0, 0, 0)

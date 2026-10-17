@@ -1,9 +1,11 @@
 // Render preview images of an imported Rain scene headless (M1/M3 visual checks).
 //   Unity.exe -batchmode -quit -projectPath <proj> -executeMethod RainShot.Run -rainScenePath <Assets/...unity> -rainOut <dir>
 //     [-rainPoses <poses.jsonl from tools/probe_campose.py>]  -> also <label>_port.png per captured RPCS3 camera pose
+//     [-rainUnlit]  -> pose renders use Unlit/Texture with each material's _MainTex (geometry/alignment check, <label>_unlit_port.png)
 // Uses the scene's own RenderSettings, lightmaps (RainLightmaps) and light probes (RainLightProbes); no preview lights.
 using System;
 using System.IO;
+using System.Linq;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -50,6 +52,14 @@ public static class RainShot
         // 3: golden-image poses captured from RPCS3
         string poses = Arg("-rainPoses");
         if (poses == null) return;
+        bool unlit = Environment.GetCommandLineArgs().Contains("-rainUnlit");
+        if (unlit)
+        {
+            var sh = Shader.Find("Unlit/Texture");
+            foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+                r.sharedMaterials = r.sharedMaterials.Select(m => { var u = new Material(sh); if (m != null && m.HasProperty("_MainTex")) u.mainTexture = m.mainTexture; return u; }).ToArray();
+            cam.backgroundColor = Color.magenta;   // holes stand out
+        }
         foreach (var line in File.ReadAllLines(poses))
         {
             var p = JsonUtility.FromJson<Pose>(line);
@@ -57,18 +67,28 @@ public static class RainShot
             cgo.transform.position = new Vector3(p.position[0], p.position[1], p.position[2]);
             cgo.transform.rotation = new Quaternion(p.rotation[0], p.rotation[1], p.rotation[2], p.rotation[3]);
             cam.fieldOfView = p.fov; cam.nearClipPlane = p.near; cam.farClipPlane = p.far; cam.aspect = p.aspect;
-            Save(cam, Path.Combine(outDir, p.label + "_port.png"));
+            cam.ResetWorldToCameraMatrix(); cam.ResetProjectionMatrix();
+            if (p.view != null && p.view.Length == 16 && p.proj != null && p.proj.Length == 16)
+            {   // exact matrices of the camera that rendered the RPCS3 frame (may be a cutscene camera, E87)
+                Matrix4x4 v = new Matrix4x4(), pr = new Matrix4x4();
+                for (int k = 0; k < 16; k++) { v[k] = p.view[k]; pr[k] = p.proj[k]; }
+                cam.worldToCameraMatrix = v; cam.projectionMatrix = pr;
+            }
+            Save(cam, Path.Combine(outDir, p.label + (unlit ? "_unlit_port.png" : "_port.png")));
         }
     }
 
-    [Serializable] class Pose { public string label; public float[] position; public float[] rotation; public float aspect, near, far, fov; }
+    [Serializable] class Pose { public string label; public float[] position; public float[] rotation; public float aspect, near, far, fov; public float[] view, proj; }
 
     static void Save(Camera cam, string path)
     {
-        var rt = new RenderTexture(1280, 720, 24); cam.targetTexture = rt; cam.Render();
-        RenderTexture.active = rt; var tex = new Texture2D(1280, 720, TextureFormat.RGB24, false);
-        tex.ReadPixels(new Rect(0, 0, 1280, 720), 0, 0); tex.Apply();
+        int w = 1280, h = 720; var sz = Arg("-rainSize");   // optional WxH (pose fitting renders small images in bulk)
+        if (sz != null) { var p = sz.Split('x'); w = int.Parse(p[0]); h = int.Parse(p[1]); }
+        var rt = new RenderTexture(w, h, 24); cam.targetTexture = rt; cam.Render();
+        RenderTexture.active = rt; var tex = new Texture2D(w, h, TextureFormat.RGB24, false);
+        tex.ReadPixels(new Rect(0, 0, w, h), 0, 0); tex.Apply();
         File.WriteAllBytes(path, tex.EncodeToPNG()); RenderTexture.active = null; cam.targetTexture = null;
-        Debug.Log("RAIN SHOT saved " + path);
+        rt.Release(); UnityEngine.Object.DestroyImmediate(rt); UnityEngine.Object.DestroyImmediate(tex);
+        if (sz == null) Debug.Log("RAIN SHOT saved " + path);
     }
 }
