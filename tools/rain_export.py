@@ -176,7 +176,7 @@ class Exporter:
                 o["camera"] = {k: (list(v) if isinstance(v, tuple) else v) for k, v in d.items() if k not in ("go", "targetTexture")}
                 o["camera"]["hasTargetTexture"] = tt is not None
             elif ccid == 114 and (pe := self.post_effect(cref, cb)) is not None:
-                o["rainMerge"] = pe
+                o[pe[0]] = pe[1]
             else:
                 self.report[f"component {ccid} skipped"] += 1
         self.objects.append(o)
@@ -188,18 +188,25 @@ class Exporter:
                 g = self.F.resolve(level, c.transform(c.R(b))["go"])
                 if g: roots.append(g)
         return roots
+    POST_EFFECTS = {"RainMergePostEffect": "Assembly-CSharp", "RainCommonPostEffect": "Assembly-UnityScript-firstpass"}
     def post_effect(self, cref, b):
-        """RainMergePostEffect settings (E91) -- the camera colour grade; other MonoBehaviours are not exported yet."""
+        """(key, settings) of a camera image effect we reproduce (E91, E92); scalars kept, curves flattened to
+        (time, value, inSlope, outSlope)*n, colours as lists, textures exported; other MonoBehaviours -> None."""
         if self.world is None: return None
         if not hasattr(self, "_ms"): self._ms = u.monoscripts(os.path.join(self.F.media, "sharedassets0.assets"))
         go, en, (fid, spid), name, p = mbd.header(b); ext = self.F.load(cref[0])[1]
-        if not (0 < fid <= len(ext) and ext[fid - 1] == "sharedassets0.assets" and self._ms.get(spid, ("",))[0] == "RainMergePostEffect"): return None
-        a = self.world.asms["Assembly-CSharp"]; i = a.byname[("", "RainMergePostEffect")]; v = {}
+        cls = self._ms.get(spid, ("",))[0]
+        if not (0 < fid <= len(ext) and ext[fid - 1] == "sharedassets0.assets" and cls in self.POST_EFFECTS): return None
+        a = self.world.asms[self.POST_EFFECTS[cls]]; i = a.byname[("", cls)]; v = {}
         for fn, node in self.world.fields(a, i): v[fn], p = mbd.read(self.world, node, b, p)
-        keep = {k: x for k, x in v.items() if isinstance(x, (int, float, bool))}
-        keep["enabled"] = bool(en); keep["curve"] = [x for k in v["m_RGBCurve"]["keys"] for x in k]   # flat (time, value, inSlope, outSlope)*n
-        keep["blendTexture"] = self.texture(self.F.resolve(cref[0], v["m_BlendTexture"]))
-        return keep
+        keep = {"enabled": bool(en)}
+        for k, x in v.items():
+            if isinstance(x, (bool, int, float)): keep[k] = x
+            elif isinstance(x, dict) and "keys" in x: keep[k] = [f for key in x["keys"] for f in key]
+            elif isinstance(x, tuple) and len(x) == 4 and all(isinstance(f, float) for f in x): keep[k] = list(x)
+        for k in ("m_BlendTexture", "maskTexture"):
+            if k in v: keep[k] = self.texture(self.F.resolve(cref[0], v[k]))
+        return ("rainMerge" if cls == "RainMergePostEffect" else "rainCommon"), keep
     def monobehaviours(self, level, world, cls):
         """Decoded fields of every `cls` MonoBehaviour (Assembly-CSharp) in a level."""
         ms = u.monoscripts(os.path.join(self.F.media, "sharedassets0.assets")); objs, ext = self.F.load(level)

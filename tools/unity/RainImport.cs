@@ -21,7 +21,7 @@ public static class RainImport
         public float[] pos; public float[] rot; public float[] scale; public string mesh; public string[] materials;
         public int lightmapIndex; public float[] lightmapST; public bool rendererEnabled = true;
         public bool useLightProbes; public string probeAnchor;
-        public Cam camera; public Merge rainMerge;
+        public Cam camera; public Merge rainMerge; public Common rainCommon;
     }
     [Serializable] public class Cam
     {
@@ -30,10 +30,17 @@ public static class RainImport
     }
     [Serializable] public class Merge
     {
-        public bool enabled; public float[] curve; public string blendTexture;
+        public bool enabled; public float[] m_RGBCurve; public string m_BlendTexture;
         public float m_GaussIntensity, m_SoftFocusBlendIntensity, m_ColorVignetteIntensity, m_BlurVignetteIntensity, m_TextureBlendIntensity, m_SaturationIntensity;
         public bool m_UpdateRGBCurve, m_ColorVignette, m_BlurVignette, m_UseMergeShader;
         public int m_SoftFocusBlendMode, m_TextureBlendMode, m_DownSizeDiv;
+    }
+    [Serializable] public class Common
+    {
+        public bool enabled, useDepthCorrection, m_SunShaftEnable; public int m_FXAASampleCount;
+        public float[] redChannel, greenChannel, blueChannel, zCurve, depthRedChannel, depthGreenChannel, depthBlueChannel;
+        public string maskTexture; public float[] maskColor, globalFogColor, globalFogHeightColor;
+        public float maskIntensity, globalFogStartDistance, globalFogDensity, globalFogHeightScale, globalFogHeight, globalFogHeightDensity, globalFogFarClip;
     }
     [Serializable] public class LmRef { public string far; public string near; }
     [Serializable] public class Render
@@ -145,11 +152,23 @@ public static class RainImport
             cam.fieldOfView = c.fov; cam.orthographic = c.ortho; cam.orthographicSize = c.orthoSize; cam.depth = c.depth;
             cam.cullingMask = (int)c.cullingMask; cam.allowHDR = c.hdr;
             cam.enabled = c.enabled && !c.hasTargetTexture && (c.clearFlags == 1 || c.clearFlags == 2);
-            var m = o.rainMerge; if (m == null || m.curve == null || m.curve.Length == 0) continue;
+            // image effects in the original component order: RainCommonPostEffect, (DepthOfFieldSimple: masked), RainMergePostEffect
+            var rc = o.rainCommon;
+            if (rc != null && rc.redChannel != null && rc.redChannel.Length > 0)
+            {
+                var ce = gos[o.id].AddComponent<RainCommonPostEffect>();
+                ce.redChannel = Curve(rc.redChannel); ce.greenChannel = Curve(rc.greenChannel); ce.blueChannel = Curve(rc.blueChannel);
+                ce.useDepthCorrection = rc.useDepthCorrection; ce.zCurve = Curve(rc.zCurve);
+                ce.depthRedChannel = Curve(rc.depthRedChannel); ce.depthGreenChannel = Curve(rc.depthGreenChannel); ce.depthBlueChannel = Curve(rc.depthBlueChannel);
+                ce.maskTexture = LoadTex(root, rc.maskTexture); ce.maskColor = Col(rc.maskColor); ce.maskIntensity = rc.maskIntensity;
+                ce.globalFogStartDistance = rc.globalFogStartDistance; ce.globalFogDensity = rc.globalFogDensity; ce.globalFogColor = Col(rc.globalFogColor);
+                ce.globalFogHeightScale = rc.globalFogHeightScale; ce.globalFogHeight = rc.globalFogHeight; ce.globalFogHeightDensity = rc.globalFogHeightDensity;
+                ce.globalFogHeightColor = Col(rc.globalFogHeightColor); ce.globalFogFarClip = rc.globalFogFarClip;
+                ce.m_FXAASampleCount = rc.m_FXAASampleCount; ce.m_SunShaftEnable = rc.m_SunShaftEnable; ce.enabled = rc.enabled;
+            }
+            var m = o.rainMerge; if (m == null || m.m_RGBCurve == null || m.m_RGBCurve.Length == 0) continue;
             var pe = gos[o.id].AddComponent<RainMergePostEffect>();
-            var keys = new Keyframe[m.curve.Length / 4];
-            for (int k = 0; k < keys.Length; k++) keys[k] = new Keyframe(m.curve[4 * k], m.curve[4 * k + 1], m.curve[4 * k + 2], m.curve[4 * k + 3]);
-            pe.m_RGBCurve = new AnimationCurve(keys); pe.m_BlendTexture = LoadTex(root, m.blendTexture);
+            pe.m_RGBCurve = Curve(m.m_RGBCurve); pe.m_BlendTexture = LoadTex(root, m.m_BlendTexture);
             pe.m_GaussIntensity = m.m_GaussIntensity; pe.m_SoftFocusBlendIntensity = m.m_SoftFocusBlendIntensity;
             pe.m_ColorVignette = m.m_ColorVignette; pe.m_ColorVignetteIntensity = m.m_ColorVignetteIntensity;
             pe.m_BlurVignette = m.m_BlurVignette; pe.m_BlurVignetteIntensity = m.m_BlurVignetteIntensity;
@@ -193,6 +212,12 @@ public static class RainImport
 
     static Texture2D LoadTex(string root, string id) { return id == null ? null : AssetDatabase.LoadAssetAtPath<Texture2D>(root + "/Textures/" + Safe(id) + ".dds"); }
     static Color Col(float[] v) { return new Color(v[0], v[1], v[2], v[3]); }
+    static AnimationCurve Curve(float[] f)   // flat (time, value, inSlope, outSlope)*n from rain_export.py
+    {
+        var keys = new Keyframe[f == null ? 0 : f.Length / 4];
+        for (int k = 0; k < keys.Length; k++) keys[k] = new Keyframe(f[4 * k], f[4 * k + 1], f[4 * k + 2], f[4 * k + 3]);
+        return new AnimationCurve(keys);
+    }
 
     static Mesh ReadMesh(string path)
     {

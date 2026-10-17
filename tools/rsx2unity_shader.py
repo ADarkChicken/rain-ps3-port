@@ -130,7 +130,7 @@ def variant_code(vsp, fsp, vi):
     init, vdecl = vp_constant_init(vsp)
     frepl, fdecl = fp_uniforms(ft)
     samplers = {u: name for u, name, ty in fsp["textures"]}; stypes = {u: ty for u, name, ty in fsp["textures"]}
-    body_f = subst(ft["lines"], frepl)
+    body_f = depth_decode(subst(ft["lines"], frepl))
     # unity_Lightmap: same texture in 2017 (engine-bound per renderer, Texture2D+SamplerState) -> sample Unity's own (E84)
     for u, n in list(samplers.items()):
         if n == "unity_Lightmap":
@@ -192,6 +192,13 @@ KW_DROP = {"SHADOWS_NATIVE", "SHADOWS_SPLIT_SPHERES"}     # D3D11 shadow maps ar
 KW_NEVER = {"SHADOWS_NONATIVE", "DIRLIGHTMAP_ON"}         # no 2017 equivalent (Rain uses dual, not directional, lightmaps: E83)
 KW_RENAME = {"HDR_LIGHT_PREPASS_ON": "UNITY_HDR_ON"}
 KW_GROUPS = [["POINT", "DIRECTIONAL", "SPOT", "POINT_COOKIE", "DIRECTIONAL_COOKIE"], ["SHADOWS_SCREEN", "SHADOWS_DEPTH", "SHADOWS_CUBE"]]
+
+# PS3 samples the D24S8 depth buffer as packed RGBA8 and rebuilds depth with this dot product (weights 255/256,
+# 255/65536, 255/16777216 on .w/.x/.y). Unity 2017 binds a float depth texture (depth in .x, reversed-Z with matching
+# _ZBufferParams), so the decode becomes a plain .x read (E92).
+DEPTH_DECODE = re.compile(r"dot\(\((asfloat\(_r\d+\))\)\.[xyzw]{4}\.xyz, float4\(0\.99609380\d*, 0\.00389099\d*, 1\.51991\d*e-05, [-0-9.e]+\)\.xyz\)")
+def depth_decode(lines):
+    return [DEPTH_DECODE.sub(lambda m: f"({m.group(1)}).x", l) for l in lines]
 
 def scalarize(decls, lines):
     """Custom `float4 X;` uniforms only ever read through .x are scalars: declare them `float` so Material.SetFloat and
