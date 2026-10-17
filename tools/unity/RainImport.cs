@@ -157,6 +157,7 @@ public static class RainImport
             if (rc != null && rc.redChannel != null && rc.redChannel.Length > 0)
             {
                 var ce = gos[o.id].AddComponent<RainCommonPostEffect>();
+                ce.ccDepthShader = Shader.Find("RainPS3/Hidden/RainCommonAdvancedShader"); ce.fxaaShader = Shader.Find("RainPS3/Hidden/FXAA2Shader");
                 ce.redChannel = Curve(rc.redChannel); ce.greenChannel = Curve(rc.greenChannel); ce.blueChannel = Curve(rc.blueChannel);
                 ce.useDepthCorrection = rc.useDepthCorrection; ce.zCurve = Curve(rc.zCurve);
                 ce.depthRedChannel = Curve(rc.depthRedChannel); ce.depthGreenChannel = Curve(rc.depthGreenChannel); ce.depthBlueChannel = Curve(rc.depthBlueChannel);
@@ -168,6 +169,7 @@ public static class RainImport
             }
             var m = o.rainMerge; if (m == null || m.m_RGBCurve == null || m.m_RGBCurve.Length == 0) continue;
             var pe = gos[o.id].AddComponent<RainMergePostEffect>();
+            pe.m_MergeShader = Shader.Find("RainPS3/Hidden/RainMergePostEffectShader");
             pe.m_RGBCurve = Curve(m.m_RGBCurve); pe.m_BlendTexture = LoadTex(root, m.m_BlendTexture);
             pe.m_GaussIntensity = m.m_GaussIntensity; pe.m_SoftFocusBlendIntensity = m.m_SoftFocusBlendIntensity;
             pe.m_ColorVignette = m.m_ColorVignette; pe.m_ColorVignetteIntensity = m.m_ColorVignetteIntensity;

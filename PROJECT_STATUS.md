@@ -1,17 +1,17 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-10-17 end of day (M3 in progress; clean checkpoint, all work committed locally).
+Last updated: 2026-10-17 (M3 / VS-1 COMPLETE; M4 awaits approval).
 
 ## Where we are
-**Phase 5: M0, M1, M2 (compile) COMPLETE; M3 (VS-1) IN PROGRESS (approved 2026-10-17; defaults: static scene only, poses from the opening of Stage 1, threshold set after first captures).**
+**Phase 5: M0, M1, M2, M3 (VS-1) COMPLETE (2026-10-17). Next milestone M4 (logic reconstruction toolchain) awaits approval.**
 | Item | Result | Evidence |
 |---|---|---|
 | M0 Host | **Unity 2017.4.40f1** (D9), x64 D3D11 player builds/runs; skeleton + PS3 shims compile; vtable layout resolved | E63–E73 |
 | M1 Assets | Class readers byte-exact on all objects; DXT native; Stage 1 exported (now 6,388 GOs, 3,905 renderers incl. 1,482 MapInstantiation copies, 809 meshes, 134 mats, 123 tex incl. 13 lightmaps) and imported with identical counts; materials bound to `RainPS3/*` (134/134); lightmaps (754 renderers, runtime `RainLightmaps`) + render settings applied | E74–E78, E83 |
 | M2 Shaders | 1,282/1,282 RSX programs → HLSL compile (d3dcompiler); 183/183 shaders → ShaderLab, all supported in Unity, 0 errors, x64 build OK | E79–E82 |
-| M3 VS-1 | Done: variant selection via Unity built-in keywords (no RAINV), engine lightmap sampler, light-probe SH bridge (`RainLightProbes`), RPCS3 pose capture tool, recursive chunk activation (all 2,075 renderers), texture row-order fix (E87), golden captures aligned (E88), map content via MapInstantiation (E89). Open: golden captures, game-set global uniforms, render-texture samplers (`rain_*`), 1,118 ambient-only renderers + untextured planes to judge vs RPCS3 | E84–E92 |
+| M3 VS-1 | **Complete.** x64 player shows Stage 1 (E93); golden structure match edge NCC 0.70/0.79/0.67 ≥ 0.65 (E92). Built: keyword bridge, lightmaps + light probes, MapInstantiation map build (1,482 copies), RainCommon/RainMerge post effects reconstructed from code, shader fixes (scalar uniforms, PS3 depth decode, texture row order). Carried to VS-2: rain systems (wet reflections, rain/mist), sun shafts, DOF | E83–E93 |
 
-**Exact next action:** decision pending with the user (E92): both camera post effects are reproduced and the structure matches (edge NCC 0.67-0.79), but RPCS3 frames are dominated by the rain systems (wet reflective ground, rain streaks/mist, sun shafts) which the port does not render yet. Options: (A) accept M3 on structure (edge NCC ≥ 0.65 on poses 2-4) and move colour fidelity to VS-2 where the rain systems are planned, or (B) port the rain render systems (RainRenderEffect, reflection/wetmask/ripple cameras) now within M3.
+**Exact next action:** ask approval for M4 (logic reconstruction toolchain T2–T5, 50-method benchmark, go/no-go). Tools ready for it: Ghidra annotation for Assembly-CSharp + Assembly-UnityScript-firstpass, `annotate_decomp.py` (field/GOT names), `prx_relocs.py`, RPCS3 GDB probes (`probe_vtable.py`, `probe_campose.py`).
 **Local-only artefacts:** `work/export/st01`, `work/unity_shaders8` (generated shaders, game-derived — never commit), Unity project `G:/Decomp/Rain/port_unity` (runtime scripts from `tools/unity/Runtime/` → `Assets/RainRuntime/`, editor scripts → `Assets/Editor/`).
 **Housekeeping:** hosts file restored (backup `hosts.bak-rain`); Unity 4.7 removal approved by user.
 

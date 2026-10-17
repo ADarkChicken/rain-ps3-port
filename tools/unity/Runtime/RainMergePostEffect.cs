@@ -26,6 +26,7 @@ public class RainMergePostEffect : MonoBehaviour
     public float m_SaturationIntensity;
     public bool m_UseMergeShader;
     public int m_DownSizeDiv = 3;
+    public Shader m_MergeShader;   // serialized so player builds include it (the original references m_MergeMaterial)
     Material m_MergeMaterial;
     readonly float[] m_aGaussWeight = new float[9];
     readonly Vector2[] m_aGaussOffset = new Vector2[9];
@@ -35,7 +36,7 @@ public class RainMergePostEffect : MonoBehaviour
         if (m_RGBCurveTex == null)
             m_RGBCurveTex = new Texture2D(256, 4, TextureFormat.ARGB32, false) { hideFlags = HideFlags.DontSave, wrapMode = TextureWrapMode.Clamp };
         if (m_MergeMaterial == null)
-            m_MergeMaterial = new Material(Shader.Find("RainPS3/Hidden/RainMergePostEffectShader")) { hideFlags = HideFlags.DontSave };
+            m_MergeMaterial = new Material(m_MergeShader != null ? m_MergeShader : Shader.Find("RainPS3/Hidden/RainMergePostEffectShader")) { hideFlags = HideFlags.DontSave };
     }
 
     // 256 curve samples over [0,1], clamped, written as (v,v,v,1) into rows 0..2

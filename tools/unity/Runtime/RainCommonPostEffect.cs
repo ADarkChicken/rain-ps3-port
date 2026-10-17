@@ -18,6 +18,7 @@ public class RainCommonPostEffect : MonoBehaviour
     public Color globalFogColor, globalFogHeightColor;
     public int m_FXAASampleCount;
     public bool m_SunShaftEnable;   // shortcut: sun shafts (RenderSunShaft) and the shine pass are not reconstructed yet (E92)
+    public Shader ccDepthShader, fxaaShader;   // serialized so player builds include them (the original references materials)
     Material ccDepthMaterial, m_FXAAmaterial;
     Texture2D rgbChannelTex, rgbDepthChannelTex, zCurveTex;
     bool updateTexturesOnStartup = true;
@@ -26,8 +27,8 @@ public class RainCommonPostEffect : MonoBehaviour
 
     void CreateMaterials()
     {
-        if (ccDepthMaterial == null) ccDepthMaterial = new Material(Shader.Find("RainPS3/Hidden/RainCommonAdvancedShader")) { hideFlags = HideFlags.DontSave };
-        if (m_FXAAmaterial == null) m_FXAAmaterial = new Material(Shader.Find("RainPS3/Hidden/FXAA2Shader")) { hideFlags = HideFlags.DontSave };
+        if (ccDepthMaterial == null) ccDepthMaterial = new Material(ccDepthShader != null ? ccDepthShader : Shader.Find("RainPS3/Hidden/RainCommonAdvancedShader")) { hideFlags = HideFlags.DontSave };
+        if (m_FXAAmaterial == null) m_FXAAmaterial = new Material(fxaaShader != null ? fxaaShader : Shader.Find("RainPS3/Hidden/FXAA2Shader")) { hideFlags = HideFlags.DontSave };
         if (rgbChannelTex == null) rgbChannelTex = NewTex(4);
         if (rgbDepthChannelTex == null) rgbDepthChannelTex = NewTex(4);
         if (zCurveTex == null) zCurveTex = NewTex(1);
