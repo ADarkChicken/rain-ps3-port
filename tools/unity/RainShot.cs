@@ -21,6 +21,7 @@ public static class RainShot
         // Preview only: simulate all streamed map chunks being loaded (scene asset is not saved). Chunks are stored inactive at
         // every level (3.5 active flags are per object, E86), so activate each inactive root with its whole subtree.
         int activated = 0;
+        if (Environment.GetCommandLineArgs().Contains("-rainActivateAll"))   // debug: show every stored object (E89: map copies are already active)
         foreach (var r in sc.GetRootGameObjects())
             if (!r.activeSelf) { foreach (var t in r.GetComponentsInChildren<Transform>(true)) t.gameObject.SetActive(true); activated++; }
         Debug.Log("RAIN SHOT: activated roots=" + activated);

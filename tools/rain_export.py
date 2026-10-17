@@ -182,21 +182,69 @@ class Exporter:
                 g = self.F.resolve(level, c.transform(c.R(b))["go"])
                 if g: roots.append(g)
         return roots
-    def prefab_roots(self, level, world):
-        """Prefabs registered by PrefabManager scripts in a prefab level."""
-        ms = u.monoscripts(os.path.join(self.F.media, "sharedassets0.assets")); out = []
-        objs, ext = self.F.load(level)
+    def monobehaviours(self, level, world, cls):
+        """Decoded fields of every `cls` MonoBehaviour (Assembly-CSharp) in a level."""
+        ms = u.monoscripts(os.path.join(self.F.media, "sharedassets0.assets")); objs, ext = self.F.load(level)
+        a = world.asms["Assembly-CSharp"]; i = a.byname[("", cls)]
         for pid, (cid, b) in objs.items():
             if cid != 114: continue
             go, en, (fid, spid), name, p = mbd.header(b)
-            if not (0 < fid <= len(ext) and ext[fid - 1] == "sharedassets0.assets" and ms.get(spid, ("",))[0] == "PrefabManager"): continue
-            a = world.asms["Assembly-CSharp"]; i = a.byname[("", "PrefabManager")]; vals = {}
+            if not (0 < fid <= len(ext) and ext[fid - 1] == "sharedassets0.assets" and ms.get(spid, ("",))[0] == cls): continue
+            vals = {}
             for fn, node in world.fields(a, i): vals[fn], p = mbd.read(world, node, b, p)
-            for e in vals["m_Prefab"]:
-                ref = self.F.resolve(level, e["_prefab"])
-                if ref and self.F.get(ref)[0] == 1: out.append(ref)
-                else: self.report["unresolved prefab"] += 1
-        return out
+            yield vals
+    def prefab_table(self, prefab_levels, world):
+        """PrefabManager.GetSharedPrefab(type, index) table (E89): each registry puts its entry j of m_Prefab /
+        m_ModelPrefab at global slot idxTbl[1 + j//2] low/high 16 bits (idxTbl[0] = count)."""
+        tbl = {1: {}, 2: {}}
+        for pl in prefab_levels:
+            for v in self.monobehaviours(pl, world, "PrefabManager"):
+                for t, lst, idx in ((1, v["m_Prefab"], v["m_PrefabIndexTbl"]), (2, v["m_ModelPrefab"], v["m_ModelPrefabIndexTbl"])):
+                    for j, k in enumerate(lst):
+                        w = idx[1 + j // 2]; ref = self.F.resolve(pl, k["_prefab"])
+                        if ref and self.F.get(ref)[0] == 1: tbl[t][(w & 0xFFFF) if j % 2 == 0 else (w >> 16)] = ref
+                        else: self.report["unresolved prefab"] += 1
+        return tbl
+    def subtree(self, ref):
+        """Prefab hierarchy as exported objects, preorder (= MapInstantiation.GetGenerationTransforms order)."""
+        saved = (self.objects, self.done); self.objects, self.done = [], set()
+        try: self.gameobject(ref, None); return self.objects
+        finally: self.objects, self.done = saved
+    def map_instances(self, level, world, prefabs):
+        """Recreate what MapInstantiation instantiates at runtime (E89): each ObjectKind = one copy of a shared prefab with
+        per-node transform/layer overrides (ObjectKind.RestoreTransform) and per-renderer lightmap data (LightMapAdjuster.Param)."""
+        cache = {}; n = 0
+        def pick(i, vals, idxs):   # RestoreTransform index rule: idxs[i]-1, else i, else keep the prefab's value
+            k = idxs[i] - 1 if i < len(idxs) else (i if i < len(vals) else -1)
+            return vals[k] if 0 <= k < len(vals) else None
+        for v in self.monobehaviours(level, world, "MapInstantiation"):
+            for kind in v["m_ObjectTbl"] + v["m_NoPrefabTbl"] + v["m_DynamicTbl"]:
+                if kind["_cutSceneOnly"] or kind["_noCreate"]: self.report["map kind skipped (cutscene/noCreate)"] += 1; continue
+                if kind["_obj"][1]: self.report["map kind with scene object (not handled)"] += 1; continue
+                ref = prefabs.get(kind["_prefabType"], {}).get(kind["_prefabIndex"])
+                if ref is None: self.report["map kind unresolved"] += 1; continue
+                if ref not in cache: cache[ref] = self.subtree(ref)
+                pre = f"mi{n}:"; n += 1; nodes = []
+                for o in cache[ref]:
+                    c2 = json.loads(json.dumps(o)); c2["id"] = pre + o["id"]; c2["parent"] = pre + o["parent"] if o["parent"] else None
+                    c2["active"] = True; nodes.append(c2)   # streamed in = activated with its whole hierarchy (E86)
+                for i, o in enumerate(nodes):
+                    for key, vals, idxs in (("pos", kind["_pos"], kind["_posIdx"]), ("rot", kind["_rot"], kind["_rotIdx"]), ("scale", kind["_scale"], kind["_scaleIdx"])):
+                        if vals and (x := pick(i, vals, idxs)) is not None: o[key] = list(x)
+                    if kind["_layer"] and (x := pick(i, kind["_layer"], kind["_layerIdx"])) is not None: o["layer"] = x
+                lp = kind["_lightmapParam"]; rends = [o for o in nodes if o["materials"]]; j = 0
+                # shortcut: renderer order = preorder like GetComponentsInChildren and LightMapAdjuster index remap = identity
+                # (single lightmap set in st01); upgrade if lightmaps land on the wrong objects
+                for k, o in enumerate(rends[:len(lp["_index"])]):
+                    if not o.get("rendererEnabled", True): continue
+                    o["useLightProbes"] = k in lp["_useProbeRendererIndex"]
+                    li = lp["_index"][k] - 1; o["lightmapIndex"] = li if li >= 0 else 255
+                    if li >= 0:
+                        ti = lp["_tillingIndex"][j] - 1 if j < len(lp["_tillingIndex"]) else j
+                        oi = lp["_offsetIndex"][j] - 1 if j < len(lp["_offsetIndex"]) else j
+                        if ti < len(lp["_tilling"]) and oi < len(lp["_offset"]): o["lightmapST"] = list(lp["_tilling"][ti]) + list(lp["_offset"][oi])
+                        j += 1
+                self.objects += nodes; self.roots.append(nodes[0]["id"]); self.report["map instances"] += 1
     def settings(self, level):
         """LightmapSettings + RenderSettings of the main level (streamed prefab levels carry none, E83)."""
         objs, _ = self.F.load(level); lm = rs = None
@@ -214,8 +262,7 @@ class Exporter:
     def run(self, level, prefab_levels):
         world = mbd.World(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "managed_il"))
         for r in self.scene_roots(level): self.roots.append(rid(r)); self.gameobject(r, None)
-        for pl in prefab_levels:
-            for r in self.prefab_roots(pl, world): self.roots.append(rid(r)); self.gameobject(r, None)
+        self.map_instances(level, world, self.prefab_table(prefab_levels, world))   # prefab templates themselves never render
         lm, rs = self.settings(level)
         json.dump({"objects": self.objects, "roots": self.roots, "lightmaps": lm["lightmaps"], "lightmapsMode": lm["mode"], "lightProbes": lm["lightProbes"], "render": rs},
                   open(os.path.join(self.out, "scene.json"), "w"))

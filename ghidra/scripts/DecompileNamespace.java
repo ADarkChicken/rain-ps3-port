@@ -10,7 +10,8 @@ public class DecompileNamespace extends GhidraScript {
     @Override
     public void run() throws Exception {
         String[] a = getScriptArgs();
-        Namespace ns = currentProgram.getSymbolTable().getNamespace(a[0], currentProgram.getGlobalNamespace());
+        Namespace ns = currentProgram.getGlobalNamespace();   // nested types: "Outer/Inner" (as in methods.csv)
+        for (String part : a[0].split("/")) if (ns != null) ns = currentProgram.getSymbolTable().getNamespace(part, ns);
         if (ns == null) throw new Exception("namespace not found: " + a[0]);
         DecompInterface d = new DecompInterface();
         d.openProgram(currentProgram);
