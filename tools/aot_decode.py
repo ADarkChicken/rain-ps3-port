@@ -41,13 +41,20 @@ class Meta:
     def field(self, row):
         if not 0 < row <= len(self.fd): return f"Field#{row}"
         return f"{self.typedef(self.fowner.get(row, 0))}::{self.fd[row-1].Name}"
+    def inst_args(self, row):
+        """Generic arguments of a MethodSpec (Instantiation blob: 0x0A, count, types) (E96)."""
+        try:
+            b = bytes(self.ms[row-1].Instantiation.value); n, i = self._cu(b, 1); out = []
+            for _ in range(n): t, i = self._sig(b, i); out.append(t)
+            return "<" + ",".join(out) + ">"
+        except Exception: return "<inst>"
     def methodspec(self, row):
         try:
             m = self.ms[row-1].Method
-            if m.table.name == "MethodDef": return self.method(m.row_index) + "<inst>"
+            if m.table.name == "MethodDef": return self.method(m.row_index) + self.inst_args(row)
             r = self.mr[m.row_index-1]; c = r.Class
             cn = (str(c.row.TypeName) if c.table.name in ("TypeRef", "TypeDef") else f"{c.table.name}#{c.row_index}")
-            return f"{cn}::{r.Name}<inst>"
+            return f"{cn}::{r.Name}{self.inst_args(row)}"
         except Exception as e: return f"MethodSpec#{row}"
     ET = {1: "void", 2: "bool", 3: "char", 4: "sbyte", 5: "byte", 6: "short", 7: "ushort", 8: "int", 9: "uint", 10: "long",
           11: "ulong", 12: "float", 13: "double", 14: "string", 0x18: "IntPtr", 0x19: "UIntPtr", 0x1c: "object"}

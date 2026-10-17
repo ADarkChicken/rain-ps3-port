@@ -1,17 +1,18 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-10-17 (M3 / VS-1 COMPLETE; M4 awaits approval).
+Last updated: 2026-10-17 (M4 COMPLETE, benchmark GO; M5 awaits approval).
 
 ## Where we are
-**Phase 5: M0, M1, M2, M3 (VS-1) COMPLETE (2026-10-17). Next milestone M4 (logic reconstruction toolchain) awaits approval.**
+**Phase 5: M0–M4 COMPLETE (2026-10-17). M4 benchmark: 83 % of 53 methods review-only (≥70 % target) → GO. Next milestone M5 (reconstruct the slice closure) awaits approval.**
 | Item | Result | Evidence |
 |---|---|---|
 | M0 Host | **Unity 2017.4.40f1** (D9), x64 D3D11 player builds/runs; skeleton + PS3 shims compile; vtable layout resolved | E63–E73 |
 | M1 Assets | Class readers byte-exact on all objects; DXT native; Stage 1 exported (now 6,388 GOs, 3,905 renderers incl. 1,482 MapInstantiation copies, 809 meshes, 134 mats, 123 tex incl. 13 lightmaps) and imported with identical counts; materials bound to `RainPS3/*` (134/134); lightmaps (754 renderers, runtime `RainLightmaps`) + render settings applied | E74–E78, E83 |
 | M2 Shaders | 1,282/1,282 RSX programs → HLSL compile (d3dcompiler); 183/183 shaders → ShaderLab, all supported in Unity, 0 errors, x64 build OK | E79–E82 |
 | M3 VS-1 | **Complete.** x64 player shows Stage 1 (E93); golden structure match edge NCC 0.70/0.79/0.67 ≥ 0.65 (E92). Built: keyword bridge, lightmaps + light probes, MapInstantiation map build (1,482 copies), RainCommon/RainMerge post effects reconstructed from code, shader fixes (scalar uniforms, PS3 depth decode, texture row order). Carried to VS-2: rain systems (wet reflections, rain/mist), sun shafts, DOF | E83–E93 |
+| M4 Toolchain | **Complete.** T2 field layout/chains, T3 vtable resolver, T4 0 unresolved generic names, T5 lift packets + compile harness; benchmark 44/53 A (83 %), all compile | E94–E96, BENCHMARK_M4.md |
 
-**Exact next action:** ask approval for M4 (logic reconstruction toolchain T2–T5, 50-method benchmark, go/no-go). Tools ready for it: Ghidra annotation for Assembly-CSharp + Assembly-UnityScript-firstpass, `annotate_decomp.py` (field/GOT names), `prx_relocs.py`, RPCS3 GDB probes (`probe_vtable.py`, `probe_campose.py`).
+**Exact next action:** ask approval for M5 (reconstruct the Stage-1 slice closure class by class with lift.py + lift_compile.py; add RPCS3 differential tests per S1 §validation). Quick tool wins first: name raw-GOT statics (`PTR_got_IMAGE + off`) and index inlined getters in lift packets (7 of 9 benchmark B cases). Reconstructions live in `work/recon/` (local only, never commit game code).
 **Local-only artefacts:** `work/export/st01`, `work/unity_shaders8` (generated shaders, game-derived — never commit), Unity project `G:/Decomp/Rain/port_unity` (runtime scripts from `tools/unity/Runtime/` → `Assets/RainRuntime/`, editor scripts → `Assets/Editor/`).
 **Housekeeping:** hosts file restored (backup `hosts.bak-rain`); Unity 4.7 removal approved by user.
 

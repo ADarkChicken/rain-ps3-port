@@ -88,10 +88,14 @@ def join_struct(words):
 
 def rewrite_call(name, args, plt, sigs):
     target = plt.get(name)
+    if target is None and "<" in name and name.startswith("plt_"):
+        base = re.sub(r"<[^>]*>$", "<inst>", name); t0 = plt.get(base)
+        if t0: target = t0.replace("<inst>", "") + "<" + name.rsplit("<", 1)[1]
     if target is None: return None
     sig = sigs.get(target)
     owner, meth = (target.split("::", 1) + [""])[:2]
-    meth = meth.replace("<inst>", "")
+    meth = re.sub(r"<[^>]*>$", "", meth)
+    sig = sig or sigs.get(re.sub(r"<[^>]*>$", "", target))
     if sig is None: return f"/*?{target}*/{meth}({', '.join(args)})"
     # value-type return through a hidden first pointer argument: plt(&tmp, ...) -> tmp = ...
     out = None
@@ -116,11 +120,47 @@ def rewrite_call(name, args, plt, sigs):
     elif meth == "op_Implicit": expr = f"(bool){merged[0] if merged else who}"
     elif meth == "op_Equality": expr = f"({merged[0]} == {merged[1]})" if len(merged) == 2 else None
     elif meth == "op_Inequality": expr = f"({merged[0]} != {merged[1]})" if len(merged) == 2 else None
-    else: expr = f"{who}.{meth}({', '.join(merged)})"
+    else:
+        targs = re.search(r"(<[^>]*>)$", target)
+        expr = f"{who}.{meth}{targs.group(1) if targs and targs.group(1) != '<inst>' else ''}({', '.join(merged)})"
     if expr is None: expr = f"{owner.split('.')[-1]}.{meth}({', '.join(merged)})"
     return f"{out} = {expr}" if out else expr
 
-def prelift(body, plt, sigs, vt, own=""):
+def rgctx_calls(asm_text, got):
+    """Per <inst> PLT call in the disassembly: the METHOD_RGCTX GOT entry loaded into r12 just before it."""
+    out, hi, lo = [], None, None
+    for line in asm_text.splitlines():
+        m = re.search(r"lis r0,(-?0x[0-9a-f]+|-?\d+)", line)
+        if m: hi = int(m.group(1), 0) & 0xFFFF; continue
+        m = re.search(r"ori r0,r0,(0x[0-9a-f]+|\d+)", line)
+        if m and hi is not None: lo = (hi << 16) | int(m.group(1), 0); continue
+        m = re.search(r"bl 0x[0-9a-f]+ ; (plt_\S+<inst>)", line)
+        if m:
+            g = got.get(lo, "") if lo is not None else ""
+            out.append(g.split(":", 1)[1] if g.startswith("METHOD_RGCTX:") else None); lo = None
+    return out
+
+def apply_rgctx(body, names):
+    """Replace the k-th `plt_X<inst>(` in the pseudocode by the k-th resolved instantiation."""
+    it = iter(names)
+    def sub(m):
+        n = next(it, None)
+        return ("" if m.group(1) else "") + ("plt_" + re.sub(r"[^A-Za-z0-9_<>\[\],]", "_", n.replace("::", "__")) + "(" if n else m.group(0))
+    return re.sub(r"(::)?plt_[A-Za-z0-9_]+<inst>\(", sub, body)
+
+def local_types(body, plt, sigs):
+    """{local: type} for `local = plt_call(...)` whose return type is a class (or the generic argument of GetComponent<T>)."""
+    types = {}
+    for m in re.finditer(r"(\w+) = (plt_[A-Za-z0-9_<>\[\],]+)\(", body):
+        tgt = plt.get(m.group(2)) or m.group(2)[4:].replace("__", "::")
+        g = re.search(r"<(\w+)>$", tgt)
+        sig = sigs.get(re.sub(r"<[^>]*>$", "", tgt))
+        t = g.group(1) if g and "GetComponent" in tgt else (sig["ret"] if sig else None)
+        if t and t not in ("void", "bool", "int", "float", "object", "string") and not t.endswith("[]"): types[m.group(1)] = t
+    return types
+
+IL_DIR, ASM = [None], [None]
+def prelift(body, plt, sigs, vt, own="", types=None):
     b = body
     b = re.sub(r"\*\*\(float \*\*\)\[R4:([-0-9.e]+)\]", lambda m: m.group(1) + "f", b)
     b = re.sub(r"\*\*\(double \*\*\)\[R8:([-0-9.e]+)\]", lambda m: m.group(1), b)
@@ -129,6 +169,10 @@ def prelift(body, plt, sigs, vt, own=""):
     b = re.sub(r"\*\([a-z0-9 ]+\*\)\[SFLDA:([^\]]*)\]", lambda m: m.group(1).replace("::", "."), b)
     # virtual calls on this
     b = re.sub(r"\(\*\*\(code \*\*\)\(\*param_1 \+ (0x[0-9a-f]+)\)\)\(param_1,?\s*", lambda m: "this." + vt.get(int(m.group(1), 16), "vcall_" + m.group(1)).split("::")[-1] + "(", b)
+    for var, t in (types or {}).items():
+        try: L = AD.layout(IL_DIR[0], ASM[0], t)
+        except Exception: continue
+        b = re.sub(rf"\*\([a-z0-9 ]+\*\)\({var} \+ (0x[0-9a-f]+)\)", lambda m: f"{var}.{L.get(int(m.group(1), 16), m.group(0))}" if int(m.group(1), 16) in L else m.group(0), b)
     # array length / element / bounds-check noise
     b = re.sub(r"\*\(u?int \*\)\((\w+(?:\.\w+)?) \+ 0xc\)", r"\1.Length", b)
     b = re.sub(r"\n\s*if \(\(?(?:ulonglong|uint)\)?\(?(?:longlong)?\)?[^\n]*<= [^\n]*\) \{\n\s*[^\n]*func_0x[0-9a-f]+\([^\n]*\);\n(?:\s*[^\n]*= \(\w+\)\w+;\n)?\s*\}", "", b)
@@ -148,7 +192,9 @@ def prelift(body, plt, sigs, vt, own=""):
     def direct(m):
         tname, meth, args = m.group(1), m.group(2), split_args(m.group(3))
         sig = sigs.get(f"{tname or own}::{meth}", len(args))
-        if sig and not sig["static"] and args: return f"{args[0]}.{meth}({', '.join(args[1:])})"
+        if sig and not sig["static"] and args:
+            if tname and tname != own and args[0] == "param_1": return f"base.{meth}({', '.join(args[1:])})"   # non-virtual call into a base type
+            return f"{args[0]}.{meth}({', '.join(args[1:])})"
         return f"{tname + '.' if tname else ''}{meth}({', '.join(args)})"
     b = re.sub(r"(?<![\w.])(?:([A-Za-z_]\w*)::)?([A-Za-z_]\w*)\(((?:[^()]|\([^()]*\))*)\)(?=;|\s*\)|,)",
                lambda m: direct(m) if (m.group(1) or sigs.get(f"{own}::{m.group(2)}")) and not m.group(2).startswith(("plt_", "func_")) else m.group(0), b)
@@ -160,7 +206,8 @@ def main(il, asm, tn, src, dst):
     plt = {mangle(r["target"]): r["target"] for r in csv.DictReader(open(os.path.join(maps, asm + ".plt.csv"))) if r["patch_type"] == "METHOD"}
     got = {int(r["got_byte_offset"], 16): (r["patch_type"] + ":" + r["target"])[:90] for r in csv.DictReader(open(os.path.join(maps, asm + ".got.csv")))}
     text = AD.annotate(open(src, encoding="utf-8").read(), AD.layout(il, asm, tn), got)
-    sigs = Sigs(il); vt = VT.offsets(VT.Types(il), tn)
+    text = AD.chain_fields(text, il, asm, tn)
+    sigs = Sigs(il); vt = VT.offsets(VT.Types(il), tn); IL_DIR[0], ASM[0] = il, asm
     skel = open(os.path.join(ROOT, "work", "skeleton", asm + ".cs"), encoding="utf-8").read()
     m = re.search(rf"(?m)^public partial class {re.escape(tn)}\b.*?^\}}", skel, re.S)
     skel_t = m.group(0) if m else ""
@@ -170,7 +217,9 @@ def main(il, asm, tn, src, dst):
         if not h: continue
         body = blk.split("---- asm")[0]
         body = body[body.index("{", body.index("(")):] if "{" in body else body
-        lifted = prelift(body, plt, sigs, vt, tn)
+        asm_part = blk.split("---- asm")[1] if "---- asm" in blk else ""
+        body = apply_rgctx(body, rgctx_calls(asm_part, got))
+        lifted = prelift(body, plt, sigs, vt, tn, local_types(body, plt, sigs))
         name = h.group(1).replace("_ctor", ".ctor").replace("_cctor", ".cctor")
         cs = [l.strip() for l in skel_t.splitlines() if re.search(rf"\b{re.escape(name.split('.')[-1] if name.startswith('.') else name)}\(", l)]
         callees = sorted({rewrite_call(n, a, plt, sigs) and plt.get(n) for _, _, n, a in call_sites(body)} - {None})

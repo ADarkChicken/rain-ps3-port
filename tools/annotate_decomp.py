@@ -32,24 +32,54 @@ class Asm:
     def is_enum(self, r):
         e = r.Extends
         return bool(e and e.row and str(getattr(e.row, "TypeName", "")) == "Enum")
+    def ref_type(self, b):
+        """Declared type name of a reference field signature (class/array/generic), for field-chain naming."""
+        e = b[1]
+        if e == 0x12: v, _ = self.cu(b, 2); return self.tdor_name(v)[0]
+        if e == 0x1D: return "array"
+        if e == 0x15: return "generic"
+        return "ref"
     def kind(self, b):
         """(name, size, align) of a field signature; size None = reference."""
         e = b[1]
         if e in ET: n = ET[e]; return (n,) + VALUE[n] if n in VALUE else (n, None, 4)
         if e == 0x11:   # valuetype
             v, _ = self.cu(b, 2); n, enum = self.tdor_name(v)
+            if n in ENUMS: return (n,) + ENUMS[n]          # enums from any assembly, by underlying type size
             if enum: return n, 4, 4
             if n in VALUE: return (n,) + VALUE[n]
             raise ValueError(f"unknown value type {n}")
-        return "ref", None, 4
+        return self.ref_type(b), None, 4
     def find(self, name):
         for i, r in enumerate(self.t.TypeDef.rows, 1):
             if str(r.TypeName) == name: return r
         return None
 
+TYPES = {}   # (declaring type, field) -> declared type name of reference fields
+ENUMS = {}   # enum type name -> (size, align) of its underlying type, collected from all assemblies
+
+def collect_enums(asms):
+    for a in asms.values():
+        for r in a.t.TypeDef.rows:
+            if not a.is_enum(r): continue
+            for f in (r.FieldList or []):
+                fr = f.row
+                if fr.Flags.fdStatic: continue
+                et = bytes(fr.Signature.value)[1]
+                n = ET.get(et)
+                if n in VALUE: ENUMS.setdefault(str(r.TypeName), VALUE[n])
+                break
+
+def typename_of(src, r): return str(r.TypeName)
+
+_ASMS = {}
+
 def layout(il_dir, asm, typename):
     """{offset: field} for typename incl. base classes found in il_dir assemblies."""
-    asms = {f[:-4]: Asm(os.path.join(il_dir, f)) for f in os.listdir(il_dir) if f.endswith(".dll")}
+    asms = _ASMS.get(il_dir)
+    if asms is None:
+        asms = _ASMS[il_dir] = {f[:-4]: Asm(os.path.join(il_dir, f)) for f in os.listdir(il_dir) if f.endswith(".dll")}
+        collect_enums(asms)
     chain, a, name = [], asms[asm], typename
     while name not in ("MonoBehaviour", "Behaviour", "Component", "Object", None):
         src = next((x for x in [a] + list(asms.values()) if x.find(name)), None)
@@ -60,8 +90,9 @@ def layout(il_dir, asm, typename):
     for src, r in reversed(chain):
         fs = [f.row for f in (r.FieldList or []) if not f.row.Flags.fdStatic]
         kinds = [(f, src.kind(bytes(f.Signature.value))) for f in fs]
+        off = (off + 3) // 4 * 4
         for f, (n, size, al) in kinds:
-            if size is None: out[off] = str(f.Name); off += 4
+            if size is None: out[off] = str(f.Name); TYPES[(typename_of(src, r), str(f.Name))] = n; off += 4
         for f, (n, size, al) in kinds:
             if size is not None: off = (off + al - 1) // al * al; out[off] = str(f.Name); off += size
     return out
@@ -79,6 +110,20 @@ def annotate(text, fields, got):
         out.append(blk)
     text = "".join(out)
     return re.sub(r"\(puVar[0-9]+ \+ (0x[0-9a-f]+)\)", lambda m: f"[{got.get(int(m.group(1), 16), m.group(1))}]", text)
+
+def chain_fields(text, il_dir, asm, owner):
+    """*(T *)(this.f + 0xNN) -> this.f.name, using the layout of f's declared type (one level, E96)."""
+    cache = {}
+    def sub(m):
+        f, off = m.group(1), int(m.group(2), 16)
+        t = next((v for (o, n), v in TYPES.items() if n == f and o == owner), None) or next((v for (o, n), v in TYPES.items() if n == f), None)
+        if t in (None, "array", "generic", "ref"): return m.group(0)
+        if t not in cache:
+            try: cache[t] = layout(il_dir, asm, t)
+            except Exception: cache[t] = {}
+        n = cache[t].get(off)
+        return f"this.{f}.{n}" if n else m.group(0)
+    return re.sub(r"\*\([a-z0-9 ]+\*\)\(this\.(\w+) \+ (0x[0-9a-f]+)\)", sub, text)
 
 if __name__ == "__main__":
     if sys.argv[1] == "--selftest":
