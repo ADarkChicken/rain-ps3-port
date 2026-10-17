@@ -38,7 +38,7 @@ public class CameraConstrainForRainEffect : MonoBehaviour
     private void init()
     {
         if (!m_Tr) m_Tr = transform;
-        if (!m_Cam) m_Cam = camera;
+        if (!m_Cam) m_Cam = GetComponent<Camera>();   // 3.5 Component.camera (obsolete in 2017, same lookup)
         if (!m_Rain) m_Rain = RainManager.GetInstance();
         if (m_Rain)
         {

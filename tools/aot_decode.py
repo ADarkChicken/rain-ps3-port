@@ -49,6 +49,55 @@ class Meta:
             cn = (str(c.row.TypeName) if c.table.name in ("TypeRef", "TypeDef") else f"{c.table.name}#{c.row_index}")
             return f"{cn}::{r.Name}<inst>"
         except Exception as e: return f"MethodSpec#{row}"
+    ET = {1: "void", 2: "bool", 3: "char", 4: "sbyte", 5: "byte", 6: "short", 7: "ushort", 8: "int", 9: "uint", 10: "long",
+          11: "ulong", 12: "float", 13: "double", 14: "string", 0x18: "IntPtr", 0x19: "UIntPtr", 0x1c: "object"}
+    def _cu(self, b, i):
+        x = b[i]
+        if x & 0x80 == 0: return x, i + 1
+        if x & 0x40 == 0: return ((x & 0x3F) << 8) | b[i + 1], i + 2
+        return ((x & 0x1F) << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3], i + 4
+    def _tdor(self, v):
+        tag, row = v & 3, v >> 2
+        if tag == 0: return self.typedef(row)
+        if tag == 1:
+            r = self.tr[row - 1]; ns = str(r.TypeNamespace)
+            return (ns + "." if ns else "") + str(r.TypeName)
+        return self.typespec(row)
+    def _sig(self, b, i):
+        e = b[i]; i += 1
+        if e in self.ET: return self.ET[e], i
+        if e in (0x11, 0x12): v, i = self._cu(b, i); return self._tdor(v), i
+        if e == 0x1D: t, i = self._sig(b, i); return t + "[]", i
+        if e in (0x13, 0x1E): n, i = self._cu(b, i); return ("!!" if e == 0x1E else "!") + str(n), i
+        if e == 0x15:
+            g, i = self._sig(b, i); n, i = self._cu(b, i); args = []
+            for _ in range(n): a, i = self._sig(b, i); args.append(a)
+            return f"{g.split(chr(96))[0]}<{','.join(args)}>", i
+        if e == 0x14:   # ARRAY: type rank numsizes sizes numlobounds lobounds
+            t, i = self._sig(b, i); rank, i = self._cu(b, i); ns, i = self._cu(b, i)
+            for _ in range(ns): _, i = self._cu(b, i)
+            nl, i = self._cu(b, i)
+            for _ in range(nl): _, i = self._cu(b, i)
+            return t + "[" + "," * (rank - 1) + "]", i
+        raise ValueError(f"sig element {e:#x}")
+    def typespec(self, row):
+        """TypeSpec signature -> readable name (generic instances, arrays, type variables) (E94)."""
+        try: return self._sig(bytes(self.ts[row - 1].Signature.value), 0)[0]
+        except Exception: return f"TypeSpec#{row}"
+    def memberref(self, row):
+        try:
+            r = self.mr[row - 1]; c = r.Class
+            cn = self._tdor_row(c) if c.table.name in ("TypeRef", "TypeDef", "TypeSpec") else f"{c.table.name}#{c.row_index}"
+            return f"{cn}::{r.Name}"
+        except Exception: return f"MemberRef#{row}"
+    def _tdor_row(self, c):
+        t = {"TypeDef": 0, "TypeRef": 1, "TypeSpec": 2}[c.table.name]; return self._tdor((c.row_index << 2) | t)
+    def token_method(self, tok):
+        """Method token by table: 0x06 MethodDef, 0x0A MemberRef, 0x2B MethodSpec (E94)."""
+        t, row = tok >> 24, tok & 0xFFFFFF
+        if t == 0x06: return self.method(row)
+        if t == 0x0A: return self.memberref(row)
+        return self.methodspec(row)
     def us(self, off):
         try:
             s = self.pe.net.user_strings.get(off)
@@ -89,6 +138,10 @@ class Aot:
             p = os.path.join(self.il_dir, name + ".dll")
             self.meta[name] = Meta(p) if os.path.exists(p) else None
         return name, self.meta[name]
+    def M_by_name(self, name):
+        if name not in self.meta:
+            p = os.path.join(self.il_dir, name + ".dll"); self.meta[name] = Meta(p) if os.path.exists(p) else None
+        return self.meta[name]
     # --- decoders (pointer = VA) ---
     def val(self, p):
         b0 = self.u8(p)
@@ -137,7 +190,7 @@ class Aot:
                     else: own, p = self.klass(p)
                     return f"{'!!' if ty == 0x1e else '!'}{num}({own})", p
                 raise ValueError(f"typespec type {ty:#x}")
-            img, p = self.val(p); n, _ = self.M(img); return f"{n}!TypeSpec#{tok & 0xffffff}", p
+            img, p = self.val(p); n, m = self.M(img); return (m.typespec(tok & 0xffffff) if m else f"{n}!TypeSpec#{tok & 0xffffff}"), p
         if tok == 0x02000000:
             img, p = self.val(p); rank, p = self.val(p); e, p = self.klass(p)
             return e + "[" + "," * (rank - 1) + "]", p
@@ -165,7 +218,7 @@ class Aot:
             s, p = self.cstr(p); return f"{pre}wrapper_name:{s}", p
         if ii == 255:
             img, p = self.val(p); tok, p = self.val(p); n, m = self.M(img)
-            return pre + (m.methodspec(tok & 0xffffff) if m else f"{n}!MethodSpec#{tok & 0xffffff}"), p
+            return pre + (m.token_method(tok) if m else f"{n}!MethodSpec#{tok & 0xffffff}"), p
         if ii == 254:
             k, p = self.klass(p); img, p = self.val(p); tok, p = self.val(p); ctx, p = self.gctx(p)
             n, m = self.M(img)
@@ -191,6 +244,12 @@ class Aot:
             self.kimg = None; k, p = self.klass(p); f, p = self.val(p)
             m = self.M(self.kimg)[1] if self.kimg is not None else None
             fname = m.field(f).split("::")[-1] if m else f"Field#{f}"
+            if "<" in k:   # field of a generic instance: look the row up in the assembly defining the generic type (E94)
+                base = k.split("<")[0].split(".")[-1]
+                for nm2 in ("mscorlib", "System", "System.Core", "UnityEngine", "Assembly-CSharp", "Assembly-CSharp-firstpass"):
+                    mm = self.M_by_name(nm2)
+                    if mm and 0 < f <= len(mm.fd) and mm.field(f).split("::")[0].split(".")[-1].split(chr(96))[0] == base:
+                        fname = mm.field(f).split("::")[-1]; break
             return nm, f"{k}::{fname}", p
         if t == P["R4"]:
             v, p = self.val(p); return nm, repr(struct.unpack(">f", struct.pack(">I", v & 0xffffffff))[0]), p
