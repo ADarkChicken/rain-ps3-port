@@ -1,0 +1,11 @@
+# Evidence — M4 reconstruction toolchain (T2-T5) and benchmark
+
+Part of the split evidence log; index and conventions: [../EVIDENCE.md](../EVIDENCE.md).
+
+
+## Retail verification (2026-10-16)
+| ID | Finding | Conf | Method |
+|----|---------|------|--------|
+| E94 | **T4 generic naming complete**: aot_decode decodes TypeSpec signatures (generic instances, arrays, type variables), method tokens by table (0x06 MethodDef / 0x0A MemberRef / 0x2B MethodSpec), MethodSpec instantiation arguments, and fields of generic instances in the defining assembly → **0 unresolved names in all GOT+PLT tables of the 4 game assemblies** (was 211 in Assembly-CSharp; e.g. `List<InvGameItem>::EmptyArray`, `Component::GetComponent<PathCameraArea>`, `float[,]::.ctor`). Ghidra labels refreshed (11,065 GOT / 4,559 PLT, 0 failures) | V | `tools/aot_decode.py`, `work/maps/*.csv` (local) |
+| E95 | **T2/T3**: `annotate_decomp.py` field layout = Mono rule (per class from the base: refs first 4-aligned, then values in declaration order, natural alignment), cross-assembly enums by underlying size, typed one-level field chains; self-check 11 RainMergePostEffect offsets. `vtable.py` = E68 rule (header 0x24, inherited slots, new virtuals in reverse declaration order, overrides reuse slots); self-check 10 runtime-observed slots; resolves e.g. RainCommonPostEffect +0x60 = CustomGraphicsBlit | V | tools + selftests |
+| E96 | **T5 + M4 benchmark**: `lift.py` (lift packets: skeleton signature, callee signatures, pseudocode with names, PLT calls as C# properties/methods with ABI-correct argument order (FPR args first in Ghidra), struct returns/args, generic args from METHOD_RGCTX, local types, base calls, literals, array/bounds-check cleanup) + `lift_compile.py` (whole-assembly csc compile against Unity 2017.4 modules + Rain.Firstpass, ~1 s, errors per method). Benchmark (BENCHMARK_M4.md): 53 methods / 6 Stage-1 classes → **44 A (83 %), 9 B, 0 C**, all compile; ≈7 s/method AI wall-clock. Findings: AOT inlines small getters (private field reads in other classes), raw-GOT static accesses need naming, Ghidra occasionally drops call arguments (asm check), Unity 3.5 Component.camera/collider → GetComponent<T>() in 2017 | V (compile, grading) / U (runtime behaviour, M5) | BENCHMARK_M4.md, `work/bench_results.csv` (local) |

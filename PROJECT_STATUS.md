@@ -16,7 +16,7 @@ Last updated: 2026-10-17 (M4 COMPLETE, benchmark GO; M5 awaits approval).
 **Local-only artefacts:** `work/export/st01`, `work/unity_shaders8` (generated shaders, game-derived — never commit), Unity project `G:/Decomp/Rain/port_unity` (runtime scripts from `tools/unity/Runtime/` → `Assets/RainRuntime/`, editor scripts → `Assets/Editor/`).
 **Housekeeping:** hosts file restored (backup `hosts.bak-rain`); Unity 4.7 removal approved by user.
 
-## Completed and verified (details + evidence IDs in EVIDENCE.md)
+## Completed and verified (evidence IDs: look up the pool in EVIDENCE.md, then open only that file in evidence/)
 | Phase | Result | Evidence |
 |---|---|---|
 | 1 Feasibility | Both PKGs extracted; IL decrypted (SDAT, CMAC-verified); FIX EBOOT + 25 SPRX decrypted (zero klic); IL bodies stripped; same build as retail (MVIDs) | E1–E18 |

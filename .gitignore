@@ -3,6 +3,7 @@
 !/.gitignore
 !/README.md
 !/*.md
+!/evidence/
 !/FUNCTION_INDEX.csv
 
 # Own tools (keys live in tools/keys.local.json, never committed)
