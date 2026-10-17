@@ -109,7 +109,13 @@ def lightprobes(r):
          "hullRays": r.vec(lambda: r.fs(3))}
     return d
 
-READERS = {197: lightprobes, 104: rendersettings, 157: lightmapsettings, 48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material}
+def camera(r):
+    d = {"go": r.pptr(), "enabled": (r.boolean(), r.align())[0], "clearFlags": r.u32(), "background": r.fs(4), "rect": r.fs(4),
+         "near": r.f32(), "far": r.f32(), "fov": r.f32(), "ortho": (r.boolean(), r.align())[0], "orthoSize": r.f32(), "depth": r.f32(),
+         "cullingMask": r.u32(), "renderingPath": r.i32(), "targetTexture": r.pptr(), "hdr": r.boolean()}   # no trailing pad
+    return d
+
+READERS = {20: camera, 197: lightprobes, 104: rendersettings, 157: lightmapsettings, 48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material}
 
 def validate(media, cids, dump=0):
     files = sorted(glob.glob(os.path.join(media, "level*"))) + sorted(glob.glob(os.path.join(media, "*.assets"))) \

@@ -21,6 +21,19 @@ public static class RainImport
         public float[] pos; public float[] rot; public float[] scale; public string mesh; public string[] materials;
         public int lightmapIndex; public float[] lightmapST; public bool rendererEnabled = true;
         public bool useLightProbes; public string probeAnchor;
+        public Cam camera; public Merge rainMerge;
+    }
+    [Serializable] public class Cam
+    {
+        public bool enabled; public int clearFlags; public float[] background; public float[] rect; public float near, far, fov, orthoSize, depth;
+        public bool ortho; public long cullingMask; public int renderingPath; public bool hdr; public bool hasTargetTexture;
+    }
+    [Serializable] public class Merge
+    {
+        public bool enabled; public float[] curve; public string blendTexture;
+        public float m_GaussIntensity, m_SoftFocusBlendIntensity, m_ColorVignetteIntensity, m_BlurVignetteIntensity, m_TextureBlendIntensity, m_SaturationIntensity;
+        public bool m_UpdateRGBCurve, m_ColorVignette, m_BlurVignette, m_UseMergeShader;
+        public int m_SoftFocusBlendMode, m_TextureBlendMode, m_DownSizeDiv;
     }
     [Serializable] public class LmRef { public string far; public string near; }
     [Serializable] public class Render
@@ -121,6 +134,28 @@ public static class RainImport
                 if (o.useLightProbes && o.lightmapIndex >= lmCount) { lpR.Add(r); lpA.Add(o.probeAnchor); }
                 if (o.lightmapIndex < lmCount) { lmR.Add(r); lmI.Add(o.lightmapIndex); lmST.Add(new Vector4(o.lightmapST[0], o.lightmapST[1], o.lightmapST[2], o.lightmapST[3])); }
             }
+        }
+        // cameras: data kept for all; only on-screen cameras (no render target, cleared to sky/colour) are enabled
+        foreach (var o in sf.objects)
+        {
+            var c = o.camera; if (c == null || c.background == null || c.background.Length != 4) continue;
+            var cam = gos[o.id].AddComponent<Camera>();
+            cam.clearFlags = (CameraClearFlags)c.clearFlags; cam.backgroundColor = Col(c.background);
+            cam.rect = new Rect(c.rect[0], c.rect[1], c.rect[2], c.rect[3]); cam.nearClipPlane = c.near; cam.farClipPlane = c.far;
+            cam.fieldOfView = c.fov; cam.orthographic = c.ortho; cam.orthographicSize = c.orthoSize; cam.depth = c.depth;
+            cam.cullingMask = (int)c.cullingMask; cam.allowHDR = c.hdr;
+            cam.enabled = c.enabled && !c.hasTargetTexture && (c.clearFlags == 1 || c.clearFlags == 2);
+            var m = o.rainMerge; if (m == null || m.curve == null || m.curve.Length == 0) continue;
+            var pe = gos[o.id].AddComponent<RainMergePostEffect>();
+            var keys = new Keyframe[m.curve.Length / 4];
+            for (int k = 0; k < keys.Length; k++) keys[k] = new Keyframe(m.curve[4 * k], m.curve[4 * k + 1], m.curve[4 * k + 2], m.curve[4 * k + 3]);
+            pe.m_RGBCurve = new AnimationCurve(keys); pe.m_BlendTexture = LoadTex(root, m.blendTexture);
+            pe.m_GaussIntensity = m.m_GaussIntensity; pe.m_SoftFocusBlendIntensity = m.m_SoftFocusBlendIntensity;
+            pe.m_ColorVignette = m.m_ColorVignette; pe.m_ColorVignetteIntensity = m.m_ColorVignetteIntensity;
+            pe.m_BlurVignette = m.m_BlurVignette; pe.m_BlurVignetteIntensity = m.m_BlurVignetteIntensity;
+            pe.m_TextureBlendIntensity = m.m_TextureBlendIntensity; pe.m_TextureBlendMode = m.m_TextureBlendMode;
+            pe.m_SaturationIntensity = m.m_SaturationIntensity; pe.m_UseMergeShader = m.m_UseMergeShader; pe.m_DownSizeDiv = m.m_DownSizeDiv;
+            pe.m_SoftFocusBlendMode = m.m_SoftFocusBlendMode; pe.m_UpdateRGBCurve = m.m_UpdateRGBCurve; pe.enabled = m.enabled;
         }
         foreach (var o in sf.objects) gos[o.id].SetActive(o.active);
 

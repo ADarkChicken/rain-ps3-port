@@ -193,6 +193,17 @@ KW_NEVER = {"SHADOWS_NONATIVE", "DIRLIGHTMAP_ON"}         # no 2017 equivalent (
 KW_RENAME = {"HDR_LIGHT_PREPASS_ON": "UNITY_HDR_ON"}
 KW_GROUPS = [["POINT", "DIRECTIONAL", "SPOT", "POINT_COOKIE", "DIRECTIONAL_COOKIE"], ["SHADOWS_SCREEN", "SHADOWS_DEPTH", "SHADOWS_CUBE"]]
 
+def scalarize(decls, lines):
+    """Custom `float4 X;` uniforms only ever read through .x are scalars: declare them `float` so Material.SetFloat and
+    Float properties bind (Unity does not route SetFloat into a float4 uniform -- every such value read 0, E91)."""
+    code = "\n".join(lines); out = set()
+    for d in decls:
+        m = re.match(r"float4 (\w+);$", d)
+        if m and all(re.match(r"\)?\.x+\b", code[u.end():]) for u in re.finditer(r"\b" + m.group(1) + r"\b", code)):
+            out.add(f"float {m.group(1)};")
+        else: out.add(d)
+    return out
+
 def keyword_select(variants):
     """3.5 keyword lists -> (pragma lines, [(variant index, 2017 keyword set)] most specific first). Variants without a 2017
     equivalent are dropped; if two map to the same set the first wins."""
@@ -270,7 +281,7 @@ def convert_shader(script, prefix="RainPS3/"):
             v, f = pairs[vi]; L, dcl = variant_code(v, f, vi)
             cond = " && ".join(f"defined({k})" for k in sorted(ks))
             if len(order) > 1: cg.append(("#if " if n == 0 else "#elif " if cond else "#else") + cond + f"   // 3.5: {' '.join(v['keywords'])}")
-            cg += sorted(dcl) + L
+            cg += sorted(scalarize(dcl, L)) + L
         if len(order) > 1: cg.append("#endif")
         cg.append("ENDCG")
         pieces.append(NL.join(cg) + NL)

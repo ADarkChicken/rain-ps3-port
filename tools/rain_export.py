@@ -106,7 +106,7 @@ class Exporter:
         for sub in ("textures", "meshes"): os.makedirs(os.path.join(out, sub), exist_ok=True)
         self.objects, self.materials, self.done = [], {}, set()
         self.textures, self.meshes = set(), set(); self.report = collections.Counter(); self.roots = []
-        self.shader_names = {}
+        self.shader_names = {}; self.world = None
     def shader_name(self, ref):
         if ref is None: return None
         if ref in self.shader_names: return self.shader_names[ref]
@@ -171,6 +171,12 @@ class Exporter:
                 o["lightmapIndex"] = rd["lightmapIndex"]; o["lightmapST"] = list(rd["lightmapTilingOffset"])
                 o["useLightProbes"] = rd["useLightProbes"]; aref = self.F.resolve(cref[0], rd["lightProbeAnchor"])
                 if aref: o["probeAnchor"] = rid(self.F.resolve(aref[0], c.transform(c.R(self.F.get(aref)[1]))["go"]))
+            elif ccid == 20:
+                d = c.camera(c.R(cb)); tt = self.F.resolve(cref[0], d["targetTexture"])
+                o["camera"] = {k: (list(v) if isinstance(v, tuple) else v) for k, v in d.items() if k not in ("go", "targetTexture")}
+                o["camera"]["hasTargetTexture"] = tt is not None
+            elif ccid == 114 and (pe := self.post_effect(cref, cb)) is not None:
+                o["rainMerge"] = pe
             else:
                 self.report[f"component {ccid} skipped"] += 1
         self.objects.append(o)
@@ -182,6 +188,18 @@ class Exporter:
                 g = self.F.resolve(level, c.transform(c.R(b))["go"])
                 if g: roots.append(g)
         return roots
+    def post_effect(self, cref, b):
+        """RainMergePostEffect settings (E91) -- the camera colour grade; other MonoBehaviours are not exported yet."""
+        if self.world is None: return None
+        if not hasattr(self, "_ms"): self._ms = u.monoscripts(os.path.join(self.F.media, "sharedassets0.assets"))
+        go, en, (fid, spid), name, p = mbd.header(b); ext = self.F.load(cref[0])[1]
+        if not (0 < fid <= len(ext) and ext[fid - 1] == "sharedassets0.assets" and self._ms.get(spid, ("",))[0] == "RainMergePostEffect"): return None
+        a = self.world.asms["Assembly-CSharp"]; i = a.byname[("", "RainMergePostEffect")]; v = {}
+        for fn, node in self.world.fields(a, i): v[fn], p = mbd.read(self.world, node, b, p)
+        keep = {k: x for k, x in v.items() if isinstance(x, (int, float, bool))}
+        keep["enabled"] = bool(en); keep["curve"] = [x for k in v["m_RGBCurve"]["keys"] for x in k]   # flat (time, value, inSlope, outSlope)*n
+        keep["blendTexture"] = self.texture(self.F.resolve(cref[0], v["m_BlendTexture"]))
+        return keep
     def monobehaviours(self, level, world, cls):
         """Decoded fields of every `cls` MonoBehaviour (Assembly-CSharp) in a level."""
         ms = u.monoscripts(os.path.join(self.F.media, "sharedassets0.assets")); objs, ext = self.F.load(level)
@@ -260,7 +278,7 @@ class Exporter:
               "haloStrength": rs["haloStrength"], "flareStrength": rs["flareStrength"]}
         return lm, rs
     def run(self, level, prefab_levels):
-        world = mbd.World(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "managed_il"))
+        world = self.world = mbd.World(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "managed_il"))
         for r in self.scene_roots(level): self.roots.append(rid(r)); self.gameobject(r, None)
         self.map_instances(level, world, self.prefab_table(prefab_levels, world))   # prefab templates themselves never render
         lm, rs = self.settings(level)

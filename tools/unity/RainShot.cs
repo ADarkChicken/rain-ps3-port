@@ -61,6 +61,9 @@ public static class RainShot
                 r.sharedMaterials = r.sharedMaterials.Select(m => { var u = new Material(sh); if (m != null && m.HasProperty("_MainTex")) u.mainTexture = m.mainTexture; return u; }).ToArray();
             cam.backgroundColor = Color.magenta;   // holes stand out
         }
+        // the scene's own main camera (culling mask, background, RainMergePostEffect colour grade, E91) unless rendering unlit
+        var gameCam = unlit ? null : UnityEngine.Object.FindObjectsOfType<RainMergePostEffect>().Select(e => e.GetComponent<Camera>()).FirstOrDefault();
+        if (gameCam != null) { cam = gameCam; cgo = gameCam.gameObject; Debug.Log("RAIN SHOT: poses use scene camera " + cgo.name); }
         foreach (var line in File.ReadAllLines(poses))
         {
             var p = JsonUtility.FromJson<Pose>(line);
