@@ -1,9 +1,9 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-10-17 (M4 COMPLETE, benchmark GO; M5 awaits approval).
+Last updated: 2026-10-18 (M5 IN PROGRESS: Stage-1 slice reconstruction).
 
 ## Where we are
-**Phase 5: M0–M4 COMPLETE (2026-10-17). M4 benchmark: 83 % of 53 methods review-only (≥70 % target) → GO. Next milestone M5 (reconstruct the slice closure) awaits approval.**
+**Phase 5: M0–M4 COMPLETE; M5 (reconstruct the Stage-1 slice closure) APPROVED 2026-10-17, in progress.**
 | Item | Result | Evidence |
 |---|---|---|
 | M0 Host | **Unity 2017.4.40f1** (D9), x64 D3D11 player builds/runs; skeleton + PS3 shims compile; vtable layout resolved | E63–E73 |
@@ -11,8 +11,9 @@ Last updated: 2026-10-17 (M4 COMPLETE, benchmark GO; M5 awaits approval).
 | M2 Shaders | 1,282/1,282 RSX programs → HLSL compile (d3dcompiler); 183/183 shaders → ShaderLab, all supported in Unity, 0 errors, x64 build OK | E79–E82 |
 | M3 VS-1 | **Complete.** x64 player shows Stage 1 (E93); golden structure match edge NCC 0.70/0.79/0.67 ≥ 0.65 (E92). Built: keyword bridge, lightmaps + light probes, MapInstantiation map build (1,482 copies), RainCommon/RainMerge post effects reconstructed from code, shader fixes (scalar uniforms, PS3 depth decode, texture row order). Carried to VS-2: rain systems (wet reflections, rain/mist), sun shafts, DOF | E83–E93 |
 | M4 Toolchain | **Complete.** T2 field layout/chains, T3 vtable resolver, T4 0 unresolved generic names, T5 lift packets + compile harness; benchmark 44/53 A (83 %), all compile | E94–E96, BENCHMARK_M4.md |
+| M5 Slice logic | **In progress.** Closure (direct calls, level4 + 41 st01 prefabs): 146 script classes → 212 top-level types / 4,339 methods (`work/maps/st01_closure*.csv`). All 238 types decompiled with switch recovery + lifted (`work/decomp_st01`, `work/lift_st01`, local). Layout rule corrected (E97). Reconstructed: see `work/recon/QUEUE.csv` (`tools/recon_status.py`); all compile together | E97 |
 
-**Exact next action:** ask approval for M5 (reconstruct the Stage-1 slice closure class by class with lift.py + lift_compile.py; add RPCS3 differential tests per S1 §validation). Quick tool wins first: name raw-GOT statics (`PTR_got_IMAGE + off`) and index inlined getters in lift packets (7 of 9 benchmark B cases). Reconstructions live in `work/recon/` (local only, never commit game code).
+**Exact next action:** 194/212 types, 2917/4339 methods done (2026-10-18). Skipped so far: LookControllerBase (~150k+ tokens, mangled quaternion/bone routines) and UTILITY.CharacterUtility (needs DecompileNamespace re-run). Queue run approved 2026-10-18; done this run: BGMManager, Util, RegionTrigger, MotionEvent, GameInput, AIMovingObstacle, AISensor, GameSoundManager, AcqGimmick, CameraManager, CharacterActionPlayer (~55k tokens/type). Paused for approval at PathGraph (`work/recon/PathGraph.cs` initialized, unfilled; mangled block-search loops + 7 dynamic-node routines, est. ~100k+). Remaining by lift size (cost proxy): PathGraph, CharacterAI, CharacterStatus, CharacterTaskBase, LookControllerBase, then 1700+ line ones (RegionManager, GameManager, DynamicObject, CutSceneManager, MapInstantiation, CharacterBase, EffectManager, CreateRainDrop, PathCamera, RuntimeMisc, FootStep, AsCommandNew ~6800 lines). Ask before each heavy type. Workflow, conventions, helpers and re-lift command: `CLAUDE.md` (loaded automatically); queue batches go through the `recon-type` subagent. Unverified-from-lift spots: SaveData `SoundParam.SetVolume` arg order, AnimationPlayer CrossFade PlayMode. Open: `UTILITY.CharacterUtility` (re-run DecompileNamespace; lookup now splits `A.B`; `IsObjectSameDir` used by CharacterMagnet). Nested types of queued classes: 45 added to `types.txt` 2026-10-17 (`work/decomp_st01/nested_missing.txt`; iterator file names use `_` for `<>`). 2026-10-18: lift packets compacted (no Skeleton line/local decls/empty meta, −30 %); `recon_view.sh` now shows only still-stubbed methods. After M5: virtual-call closure, RPCS3 differential tests (S1 §validation).
 **Local-only artefacts:** `work/export/st01`, `work/unity_shaders8` (generated shaders, game-derived — never commit), Unity project `G:/Decomp/Rain/port_unity` (runtime scripts from `tools/unity/Runtime/` → `Assets/RainRuntime/`, editor scripts → `Assets/Editor/`).
 **Housekeeping:** hosts file restored (backup `hosts.bak-rain`); Unity 4.7 removal approved by user.
 

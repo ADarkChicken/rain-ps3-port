@@ -28,7 +28,13 @@ class Asm:
     def tdor_name(self, v):
         tag, row = v & 3, v >> 2
         r = [self.t.TypeDef, self.t.TypeRef, self.t.TypeSpec][tag].rows[row - 1]
-        return str(getattr(r, "TypeName", "?")), (tag == 0 and self.is_enum(r))
+        n = str(getattr(r, "TypeName", "?"))
+        if tag == 0 and row in self.enc(): n = f"{self.t.TypeDef.rows[self.enc()[row] - 1].TypeName}/{n}"   # nested: Outer/Inner (E97)
+        return n, (tag == 0 and self.is_enum(r))
+    def enc(self):
+        if not hasattr(self, "_enc"):
+            self._enc = {r.NestedClass.row_index: r.EnclosingClass.row_index for r in (self.t.NestedClass.rows if self.t.NestedClass else [])}
+        return self._enc
     def is_enum(self, r):
         e = r.Extends
         return bool(e and e.row and str(getattr(e.row, "TypeName", "")) == "Enum")
@@ -45,17 +51,27 @@ class Asm:
         if e in ET: n = ET[e]; return (n,) + VALUE[n] if n in VALUE else (n, None, 4)
         if e == 0x11:   # valuetype
             v, _ = self.cu(b, 2); n, enum = self.tdor_name(v)
-            if n in ENUMS: return (n,) + ENUMS[n]          # enums from any assembly, by underlying type size
+            if n.split("/")[-1] in ENUMS: return (n,) + ENUMS[n.split("/")[-1]]          # enums from any assembly, by underlying type size
             if enum: return n, 4, 4
             if n in VALUE: return (n,) + VALUE[n]
-            raise ValueError(f"unknown value type {n}")
+            return (n,) + struct_size(n)
         return self.ref_type(b), None, 4
     def find(self, name):
+        """TypeDef row by name; nested types as 'Outer/Inner' (matched through the NestedClass table)."""
+        if "/" in name:
+            outer, inner = name.rsplit("/", 1)
+            self.enc()
+            want = outer.rsplit("/", 1)[-1]
+            for i, r in enumerate(self.t.TypeDef.rows, 1):
+                if str(r.TypeName) == inner and i in self._enc and str(self.t.TypeDef.rows[self._enc[i] - 1].TypeName) == want: return r
+            return None
         for i, r in enumerate(self.t.TypeDef.rows, 1):
             if str(r.TypeName) == name: return r
         return None
 
 TYPES = {}   # (declaring type, field) -> declared type name of reference fields
+STRUCT_AT = {}   # (type, field offset) -> (struct type name, size) for value-type fields wider than one word
+HASREF = set()   # value types that contain object references (Mono lays them out in the reference pass, E97)
 ENUMS = {}   # enum type name -> (size, align) of its underlying type, collected from all assemblies
 
 def collect_enums(asms):
@@ -70,6 +86,53 @@ def collect_enums(asms):
                 if n in VALUE: ENUMS.setdefault(str(r.TypeName), VALUE[n])
                 break
 
+def struct_size(name):
+    """(size, align) of a value type from its instance fields in any loaded assembly (sequential layout); cached in VALUE."""
+    for a in (x for asms in _ASMS.values() for x in asms.values()):
+        r = a.find(name)
+        if r is None: continue
+        off, al = 0, 1
+        for f in (r.FieldList or []):
+            if f.row.Flags.fdStatic: continue
+            fn, sz, fa = a.kind(bytes(f.row.Signature.value))
+            if sz is None or fn in HASREF: HASREF.add(name)
+            sz = sz if sz is not None else 4
+            off = (off + fa - 1) // fa * fa + sz; al = max(al, fa)
+        VALUE[name] = ((off + al - 1) // al * al or 1, al)
+        return VALUE[name]
+    raise ValueError(f"unknown value type {name}")
+
+class Layout(dict):
+    """{offset: field} that remembers its type (for struct-interior names)."""
+    def __init__(self, typename): super().__init__(); self.typename = typename
+
+def struct_fields(name):
+    """{offset: 'a.b'} of a struct's instance fields (sequential), nested structs flattened."""
+    for a in (x for asms in _ASMS.values() for x in asms.values()):
+        r = a.find(name)
+        if r is None: continue
+        out, off = {}, 0
+        for f in (r.FieldList or []):
+            if f.row.Flags.fdStatic: continue
+            fn, sz, fa = a.kind(bytes(f.row.Signature.value)); sz = sz or 4
+            off = (off + fa - 1) // fa * fa
+            sub = struct_fields(fn) if sz > fa and fn not in VALUE_PRIMS else {}
+            out.update({off + k: f"{f.row.Name}.{v}" for k, v in sub.items()} or {off: str(f.row.Name)})
+            off += sz
+        return out
+    return {}
+
+VALUE_PRIMS = {"long", "ulong", "double"}
+
+def field_name(typename, fields, off):
+    """Name of the field at off, or 'struct.sub' when off falls inside a struct-typed field."""
+    if off in fields: return fields[off]
+    for (t, o), (n, size) in STRUCT_AT.items():
+        if t == typename and o < off < o + size:
+            sub = struct_fields(n).get(off - o)
+            if sub: return f"{fields[o]}.{sub}"
+    return None
+
 def typename_of(src, r): return str(r.TypeName)
 
 _ASMS = {}
@@ -80,42 +143,55 @@ def layout(il_dir, asm, typename):
     if asms is None:
         asms = _ASMS[il_dir] = {f[:-4]: Asm(os.path.join(il_dir, f)) for f in os.listdir(il_dir) if f.endswith(".dll")}
         collect_enums(asms)
-    chain, a, name = [], asms[asm], typename
-    while name not in ("MonoBehaviour", "Behaviour", "Component", "Object", None):
+    chain, a, name, ns = [], asms[asm], typename, ""
+    while name not in ("MonoBehaviour", "Behaviour", "Component", "Object", "ValueType", None):
         src = next((x for x in [a] + list(asms.values()) if x.find(name)), None)
         if src is None: break
         r = src.find(name); chain.append((src, r))
-        name = str(r.Extends.row.TypeName) if r.Extends and r.Extends.row else None
-    off, out = 0x10, {}
+        name, ns = (str(r.Extends.row.TypeName), str(getattr(r.Extends.row, "TypeNamespace", ""))) if r.Extends and r.Extends.row else (None, "")
+    # object header: UnityEngine.Object-derived 0x10, plain class (System.Object) 0x8 (vtable + sync), struct `this` 0
+    off, out = (0 if name == "ValueType" else 8 if (name, ns) == ("Object", "System") else 0x10), Layout(typename)
     for src, r in reversed(chain):
         fs = [f.row for f in (r.FieldList or []) if not f.row.Flags.fdStatic]
         kinds = [(f, src.kind(bytes(f.Signature.value))) for f in fs]
         off = (off + 3) // 4 * 4
-        for f, (n, size, al) in kinds:
+        for f, (n, size, al) in kinds:   # pass 0: references and structs containing references, declaration order
             if size is None: out[off] = str(f.Name); TYPES[(typename_of(src, r), str(f.Name))] = n; off += 4
+            elif n in HASREF: off = (off + al - 1) // al * al; out[off] = str(f.Name); STRUCT_AT[(typename, off)] = (n, size); off += size
         for f, (n, size, al) in kinds:
-            if size is not None: off = (off + al - 1) // al * al; out[off] = str(f.Name); off += size
+            if size is not None and n not in HASREF:
+                off = (off + al - 1) // al * al; out[off] = str(f.Name)
+                if size > al: STRUCT_AT[(typename, off)] = (n, size)
+                off += size
     return out
 
-def annotate(text, fields, got):
+def annotate(text, fields, got, static=()):
     """Per function: `this` may be typed int* by Ghidra (param_1[i] / param_1 + i scale by 4) or as a byte offset."""
-    def name(off): return "this." + fields.get(off, hex(off))
+    def fname(off): return field_name(getattr(fields, "typename", None), fields, off)
+    def name(off): return "this." + (fname(off) or hex(off))
+    def gotref(blk):   # (GOTBASE + off) -> [slot name]; GOTBASE = PTR_got_IMAGE_* or a puVarN assigned from it here
+        base = "|".join(["PTR_got_IMAGE_\\w+"] + re.findall(r"\b(puVar\d+) = PTR_got_IMAGE_\w+;", blk))
+        return re.sub(rf"\((?:{base}) \+ (0x[0-9a-f]+|\d+)\)", lambda m: f"[{got.get(int(m.group(1), 0), m.group(1))}]", blk)
     out = []
     for blk in re.split(r"(?m)^(?===== )", text):
+        h = re.match(r"==== (\w+) ", blk)
+        if h and h.group(1) in static: out.append(gotref(blk)); continue   # static method: param_1 is not `this`
         sig = re.search(r"\w[\w:<>]*\(([^)]*)\)\s*\{", blk)
         scale = 4 if sig and re.search(r"(int|undefined4|uint) \*param_1", sig.group(1)) else 1
         blk = re.sub(r"\*\([a-z0-9 ]+\*\)\(\(int\)param_1 \+ (0x[0-9a-f]+|\d+)\)", lambda m: name(int(m.group(1), 0)), blk)
         blk = re.sub(r"\*\([a-z0-9 ]+\*\)\(param_1 \+ (0x[0-9a-f]+|\d+)\)", lambda m: name(int(m.group(1), 0) * scale), blk)
         blk = re.sub(r"param_1\[(0x[0-9a-f]+|\d+)\]", lambda m: name(int(m.group(1), 0) * 4), blk)
-        out.append(blk)
-    text = "".join(out)
-    return re.sub(r"\(puVar[0-9]+ \+ (0x[0-9a-f]+)\)", lambda m: f"[{got.get(int(m.group(1), 16), m.group(1))}]", text)
+        # remaining `param_1 + off` (not dereferenced) = address of a field, e.g. a struct passed by ref
+        blk = re.sub(r"(?<![*\w])(\(int\))?param_1 \+ (0x[0-9a-f]+)(?![\w\[])",
+                     lambda m: "ref " + name(int(m.group(2), 16) * (1 if m.group(1) else scale)) if fname(int(m.group(2), 16) * (1 if m.group(1) else scale)) else m.group(0), blk)
+        out.append(gotref(blk))
+    return "".join(out)
 
 def chain_fields(text, il_dir, asm, owner):
     """*(T *)(this.f + 0xNN) -> this.f.name, using the layout of f's declared type (one level, E96)."""
     cache = {}
     def sub(m):
-        f, off = m.group(1), int(m.group(2), 16)
+        f, off = m.group(1), int(m.group(2), 0)
         t = next((v for (o, n), v in TYPES.items() if n == f and o == owner), None) or next((v for (o, n), v in TYPES.items() if n == f), None)
         if t in (None, "array", "generic", "ref"): return m.group(0)
         if t not in cache:
@@ -123,7 +199,7 @@ def chain_fields(text, il_dir, asm, owner):
             except Exception: cache[t] = {}
         n = cache[t].get(off)
         return f"this.{f}.{n}" if n else m.group(0)
-    return re.sub(r"\*\([a-z0-9 ]+\*\)\(this\.(\w+) \+ (0x[0-9a-f]+)\)", sub, text)
+    return re.sub(r"\*\([a-z0-9 ]+\*\)\(this\.(\w+) \+ (0x[0-9a-f]+|\d+)\)", sub, text)
 
 if __name__ == "__main__":
     if sys.argv[1] == "--selftest":

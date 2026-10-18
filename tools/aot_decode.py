@@ -273,7 +273,7 @@ class Aot:
         if t == P["SWITCH"]:
             n, p = self.val(p); tgt = []
             for _ in range(n): v, p = self.val(p); tgt.append(v)
-            return nm, f"{n} targets " + " ".join(hex(x) for x in tgt[:8]) + (" ..." if n > 8 else ""), p
+            return nm, f"{n} targets " + " ".join(hex(x) for x in tgt), p
         if t == P["MSCORLIB_GOT_ADDR"]: return nm, "", p
         if t == P["METHOD_REL"]:
             v, p = self.val(p); return nm, str(v), p

@@ -1,5 +1,6 @@
 """Direct call graph of a Mono AOT PRX (bl targets that are method starts) + per-level reachable closure.
-Usage: aot_callgraph.py <prx> <methods.csv> <Media dir> <il dir> <out.csv> level0 level12 ...
+Usage: aot_callgraph.py <prx> <methods.csv> <Media dir> <il dir> <out.csv> level0 level12 ...   (a+b+c = union of files)
+Also writes <out>.methods.csv: level, type, method, address, size, root (1 = method of an attached script class chain).
 Roots = all methods of script classes (and their game base classes) attached in that level. Virtual/delegate calls are
 NOT followed (lower bound). Output: level, script classes, reachable game methods, reachable code bytes, external call sites."""
 import csv, os, struct, sys, collections, bisect
@@ -36,14 +37,17 @@ def main():
         while a is asm and i:
             out.append(w.full(a, i)); a, i = w.base(a, i)
         return out
-    with open(out, "x", newline="") as f:
+    with open(out, "x", newline="") as f, open(out[:-4] + ".methods.csv", "x", newline="") as fm:
+        mw = csv.writer(fm); mw.writerow(["level", "type", "method", "address", "size", "root"])
         cw = csv.writer(f); cw.writerow(["level", "script_classes", "reachable_methods", "reachable_bytes", "external_call_sites"])
         for lv in levels:
-            path = os.path.join(media, lv); ext_files = u.externals(path); classes = set()
-            for _, _, ob in u.objects(path, 114):
-                fid, spid = struct.unpack(">ii", ob[12:20])
-                if 0 < fid <= len(ext_files) and ext_files[fid-1].endswith("sharedassets0.assets") and spid in ms:
-                    classes.add(ms[spid][0])
+            classes = set()
+            for part in lv.split("+"):
+                path = os.path.join(media, part); ext_files = u.externals(path)
+                for _, _, ob in u.objects(path, 114):
+                    fid, spid = struct.unpack(">ii", ob[12:20])
+                    if 0 < fid <= len(ext_files) and ext_files[fid-1].endswith("sharedassets0.assets") and spid in ms:
+                        classes.add(ms[spid][0])
             roots = set()
             for c in classes:
                 for t in chain(c): roots.update(bytype.get(t, []))
@@ -52,6 +56,8 @@ def main():
                 m = stack.pop()
                 if m in seen: continue
                 seen.add(m); stack.extend(edges[m] - seen)
+            for m in sorted(seen, key=lambda m: (info[m]["type"], m)):
+                mw.writerow([lv, info[m]["type"], info[m]["method"], hex(m), info[m]["size"], int(m in roots)])
             cw.writerow([lv, len(classes), len(seen), sum(int(info[m]["size"]) for m in seen), sum(ext[m] for m in seen)])
             print(lv, "classes", len(classes), "reachable methods", len(seen), "bytes", sum(int(info[m]["size"]) for m in seen))
     print("total methods", len(starts), "direct edges", sum(len(v) for v in edges.values()))
