@@ -18,6 +18,8 @@ Never start a new phase/milestone without the user's approval. Keep chat reports
 3. Fill with `tools/recon_fill.py`: `fill(type, {"Name(": body})` replaces stubs (key = `'Name('` or exact line prefix).
 4. `tools/lift_compile.py Assembly-CSharp work/recon/*.cs` (~1 s; also runs automatically after edits to `work/recon/*.cs`)
 5. `tools/recon_status.py` updates `work/recon/QUEUE.csv`. Work the queue smallest-first.
+6. After a batch: `bash tools/replay.sh` (RPCS3 call samples vs recon, E98) and triage new FAIL lines (most are harness
+   environment gaps; a FAIL on a method that only uses restored value fields is a real bug, e.g. E99).
 
 Conventions:
 - Stores that come before the base .ctor call become field initializers.
@@ -30,6 +32,8 @@ Conventions:
 Lookups:
 - Field offsets: `annotate_decomp.layout(il_dir, asm, type)` gives {offset: field}.
 - Virtual slots: `tools/vtable.py work/managed_il <Type>`.
+- PS3 Mono AOT ABI (E98): `this`/args from r3; each float arg goes in f1.. AND uses up a GPR slot; struct args one word
+  per GPR; args past r10 on the stack from sp+0x30; struct returns via a hidden pointer in r3 before `this`.
 
 Re-lift after a tool change (~4 min):
 `lift.py work/managed_il Assembly-CSharp @work/decomp_st01/types.txt work/decomp_st01 work/lift_st01`.
@@ -37,5 +41,8 @@ Re-lift after a tool change (~4 min):
 DecompileNamespace takes `work/maps/Assembly-CSharp.got.csv` as its 3rd arg (switch recovery).
 
 Delegation: the `recon-type` subagent (`.claude/agents/recon-type.md`) does one type per fresh context. Prefer it for
-queue batches, so the main session only tracks progress. Cost is ~40-80k tokens/type. Ask the user before a type
-predicted to be bigger, and before tool changes, Ghidra mass runs or RPCS3 sessions.
+queue batches, so the main session only tracks progress. Cost is ~80-200k tokens/type (40-60 methods). Big types go in
+split passes: one call per method group (list the methods to fill), run sequentially on the same file. Independent types
+can run in parallel (tell each agent to ignore compile errors in the others' files). Spot-check the agent's "unverified"
+list against asm/GOT (`work/maps/Assembly-CSharp.got.csv`) when cheap. Ask the user before a type predicted to be bigger,
+and before tool changes, Ghidra mass runs or RPCS3 sessions.

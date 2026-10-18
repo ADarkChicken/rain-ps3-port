@@ -1,7 +1,8 @@
 """Compile harness for reconstructed classes (T5, E96): replaces the skeleton declaration of every class defined in the
 given .cs files, compiles the whole assembly with csc against Unity 2017.4 (module assemblies) + Rain.Firstpass, and
 reports errors per reconstructed method.
-Usage: lift_compile.py <assembly> <recon.cs> [...]      (assembly = Assembly-CSharp, skeleton from work/skeleton)
+Usage: lift_compile.py [--out <dll>] <assembly> <recon.cs> [...]      (assembly = Assembly-CSharp, skeleton from work/skeleton)
+--out keeps the compiled DLL (assembly name = file name, e.g. RainRecon.dll for the replay harness).
 A reconstruction file holds complete top-level classes (fields + all methods; unreconstructed methods keep the skeleton
 stub). Exit code 0 = no errors."""
 import os, re, subprocess, sys, tempfile
@@ -30,7 +31,7 @@ def top_level_types(src):
         out.append((m.group(1), m.start(), k + 1)); i = k + 1
     return out
 
-def main(asm, files):
+def main(asm, files, out=None):
     skel = open(os.path.join(ROOT, "work", "skeleton", asm + ".cs"), encoding="utf-8").read()
     recon = {f: open(f, encoding="utf-8").read() for f in files}
     names = {n for s in recon.values() for n, _, _ in top_level_types(s)}
@@ -42,7 +43,7 @@ def main(asm, files):
     refs += [os.path.join(SA, "Rain.Firstpass.dll"), os.path.join(UNITY, "Mono", "lib", "mono", "unity", "Boo.Lang.dll"),
              os.path.join(UNITY, "Mono", "lib", "mono", "unity", "UnityScript.Lang.dll")]
     cmd = [CSC, "-nologo", "-target:library", "-nowarn:0108,0114,0162,0168,0219,0414,0649,0169,0067,1685,0436",
-           "-out:" + os.path.join(tmp, asm + ".dll")] + ["-r:" + os.path.abspath(r) for r in refs] + [sk] + [os.path.abspath(f) for f in files]
+           "-out:" + (os.path.abspath(out) if out else os.path.join(tmp, asm + ".dll"))] + ["-r:" + os.path.abspath(r) for r in refs] + [sk] + [os.path.abspath(f) for f in files]
     r = subprocess.run(cmd, capture_output=True, text=True)
     errs = [l for l in r.stdout.splitlines() if "error CS" in l]
     for f, s in recon.items():
@@ -58,4 +59,7 @@ def main(asm, files):
     return 0 if not errs else 1
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1], sys.argv[2:]))
+    a = sys.argv[1:]
+    out = None
+    if a[0] == "--out": out, a = a[1], a[2:]
+    sys.exit(main(a[0], a[1:], out))
