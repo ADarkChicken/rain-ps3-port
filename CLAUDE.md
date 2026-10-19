@@ -37,6 +37,8 @@ Lookups:
 
 Re-lift after a tool change (~4 min):
 `lift.py work/managed_il Assembly-CSharp @work/decomp_st01/types.txt work/decomp_st01 work/lift_st01`.
+Namespaced types are named `N.Type` everywhere (recon file `work/recon/N.Type.cs` keeps its `namespace N { }` wrapper;
+Ghidra namespace `N_Type`, E100).
 `RendererCollectorManager/{RendererArray2D,OBBArray2D}` fail there (generic TypeSpec base): ctor only, read the decomp.
 DecompileNamespace takes `work/maps/Assembly-CSharp.got.csv` as its 3rd arg (switch recovery).
 

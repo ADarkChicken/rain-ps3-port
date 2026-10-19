@@ -10,8 +10,9 @@ def main(asm, types):
     decl = {n: skel[st:en] for n, st, en in top_level_types(skel)}
     for t in types:
         out = os.path.join(ROOT, "work", "recon", t + ".cs")
+        d = decl[t] if "." not in t else f"namespace {t.split('.')[0]}\n{{\n{decl[t]}\n}}"   # "N.Type": keep the namespace
         with open(out, "x", encoding="utf-8") as f:
-            f.write(f"// Reconstructed from Rain (NPUA80719) {asm} AOT code (M5). Source: work/lift_st01/{t}*.md\n{decl[t]}\n")
+            f.write(f"// Reconstructed from Rain (NPUA80719) {asm} AOT code (M5). Source: work/lift_st01/{t}*.md\n{d}\n")
         print(out)
 
 if __name__ == "__main__":

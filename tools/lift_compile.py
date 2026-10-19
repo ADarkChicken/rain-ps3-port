@@ -13,10 +13,14 @@ SA = os.path.join(ROOT, "..", "_tools", "m0_host_compile", "Library", "ScriptAss
 CSC = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 
 def top_level_types(src):
-    """[(name, start, end)] of top-level type declarations (brace-matched, strings/comments-aware enough for skeletons)."""
+    """[(name, start, end)] of top-level type declarations (brace-matched, strings/comments-aware enough for skeletons).
+    Types directly inside a top-level `namespace N` block (4-space indent) are named "N.Type"."""
     out, i = [], 0
-    for m in re.finditer(r"(?m)^(?:\[[^\n]*\]\s*)*(?:public |internal )?(?:sealed |abstract |static )*(?:partial )?(?:class|struct|interface|enum) (\w+)", src):
+    nss = [(m.start(), m.group(1)) for m in re.finditer(r"(?m)^namespace (\w+)", src)]
+    for m in re.finditer(r"(?m)^( {4})?(?:\[[^\n]*\]\s*)*(?:public |internal )?(?:sealed |abstract |static )*(?:partial )?(?:class|struct|interface|enum) (\w+)", src):
         if m.start() < i: continue
+        ns = [n for p, n in nss if p < m.start()]
+        if m.group(1) and not ns: continue
         j = src.index("{", m.end()); depth = 0; k = j
         while True:
             c = src[k]
@@ -28,7 +32,7 @@ def top_level_types(src):
                 depth -= 1
                 if depth == 0: break
             k += 1
-        out.append((m.group(1), m.start(), k + 1)); i = k + 1
+        out.append(((ns[-1] + "." if m.group(1) else "") + m.group(2), m.start(), k + 1)); i = k + 1
     return out
 
 def main(asm, files, out=None):

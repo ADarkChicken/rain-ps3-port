@@ -34,9 +34,10 @@ def main(args):
         stubs = None if show_all or not rf else stub_names(open(rf, encoding="utf-8").read())
         top = top or t.split(".")[0]
         print(f"######## {t}" + ("" if stubs is None else f"  ({len(stubs)} stub names left in {os.path.basename(rf)})"))
-        if top not in shown and top.split(".")[-1] in decl:
+        key = top if top in decl else top.split(".")[-1]   # "N.Type" for namespaced types
+        if top not in shown and key in decl:
             shown.add(top)
-            for l in decl[top.split(".")[-1]].splitlines():
+            for l in decl[key].splitlines():
                 if NI in l and stubs is not None and not member_names(l) & stubs: continue
                 if l.strip(): print(l.replace(NI, ";").replace(" { get { throw new global::System.NotImplementedException(); } }", " { get; }"))
         pkt = os.path.join(ROOT, "work", "lift_st01", t.replace("/", ".").replace("<", "_").replace(">", "_") + ".md")

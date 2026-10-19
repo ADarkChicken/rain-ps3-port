@@ -31,7 +31,8 @@ public class DecompileNamespace extends GhidraScript {
     private void dump(String type, String out) throws Exception {
         String[] a = {type, out};
         Namespace ns = currentProgram.getGlobalNamespace();   // nested types: "Outer/Inner" (as in methods.csv)
-        for (String part : a[0].split("/")) if (ns != null) ns = currentProgram.getSymbolTable().getNamespace(part, ns);
+        // ApplyMethodNames stores C# namespace dots as '_' ("UTILITY.CharacterUtility" -> UTILITY_CharacterUtility)
+        for (String part : a[0].replace('.', '_').split("/")) if (ns != null) ns = currentProgram.getSymbolTable().getNamespace(part, ns);
         if (ns == null && a[0].contains(".")) {   // C# namespace "A.B": try Ghidra namespace path A::B
             ns = currentProgram.getGlobalNamespace();
             for (String part : a[0].split("[/.]")) if (ns != null) ns = currentProgram.getSymbolTable().getNamespace(part, ns);
