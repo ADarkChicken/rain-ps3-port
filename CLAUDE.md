@@ -19,7 +19,8 @@ Never start a new phase/milestone without the user's approval. Keep chat reports
 4. `tools/lift_compile.py Assembly-CSharp work/recon/*.cs` (~1 s; also runs automatically after edits to `work/recon/*.cs`)
 5. `tools/recon_status.py` updates `work/recon/QUEUE.csv`. Work the queue smallest-first.
 6. After a batch: `bash tools/replay.sh` (RPCS3 call samples vs recon, E98) and triage new FAIL lines (most are harness
-   environment gaps; a FAIL on a method that only uses restored value fields is a real bug, e.g. E99).
+   environment gaps; a FAIL on a method that only uses restored value fields is a real bug, e.g. E99). A `~` status
+   (PASS~/FAIL~/EXC~) means an engine stand-in was used: weaker evidence (E103).
 
 Conventions:
 - Stores that come before the base .ctor call become field initializers.
@@ -28,6 +29,8 @@ Conventions:
 - PS3 engine API → Unity 2017: `Transform.TransformPoint2(in, ref out)` = `TransformPoint`,
   `Vector3.Normalize2(in, out)` = `.normalized`, `InteractiveCloth` = `Cloth`.
 - Keep the original's quirks and mark them `// sic 0x<asm addr>`.
+- `GetComponent(s)InChildren<T>()` and `(bool)` use different PLT slots: no `li r4` before the `bl` = parameterless (E102).
+- A lone `lwz r0,0(rX)` after a null test = Mono null check of an inlined (maybe empty) call: keep the call (E102).
 
 Lookups:
 - Field offsets: `annotate_decomp.layout(il_dir, asm, type)` gives {offset: field}.

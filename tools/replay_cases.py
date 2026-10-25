@@ -25,14 +25,14 @@ def main(out, files):
             types.add(d["type"])
     il = os.path.join(ROOT, "work", "managed_il")
     lay = []
-    for t in sorted(types):
+    for t in sorted(types | recon):   # all recon types: concrete subclasses and object args need layouts too
         try: L = annotate_decomp.layout(il, "Assembly-CSharp", t)
         except Exception as ex: print("layout failed", t, ex); continue
         lay.append(t + "\t" + ",".join(f"{o}={n}" for o, n in sorted(L.items())))
     os.makedirs(out, exist_ok=True)
     open(os.path.join(out, "cases.tsv"), "w", newline="\n").write("\n".join(cases) + "\n")
     open(os.path.join(out, "layouts.tsv"), "w", newline="\n").write("\n".join(lay) + "\n")
-    print(f"{len(cases)} cases, {len(types)} types -> {out}")
+    print(f"{len(cases)} cases, {len(types)} types, {len(lay)} layouts -> {out}")
 
 if __name__ == "__main__":
     main(sys.argv[1], sys.argv[2:])

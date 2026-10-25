@@ -15,7 +15,7 @@ Each finding keeps its permanent ID; look up an ID here, then open its pool.
 | [evidence/04_unity_host.md](evidence/04_unity_host.md) | Host engine choice and setup (Unity 4.7 / 2017.4), player builds | E63, E70–E72, E93 |
 | [evidence/05_assets_scene_import.md](evidence/05_assets_scene_import.md) | Asset classes, export/import, lightmaps, probes, map instantiation, textures | E67, E74–E78, E83, E85, E87, E89 |
 | [evidence/06_shaders_post_effects.md](evidence/06_shaders_post_effects.md) | Shader translation, keyword bridge, post effects, colour grade | E79–E82, E84, E90–E92 |
-| [evidence/07_logic_toolchain_m4.md](evidence/07_logic_toolchain_m4.md) | M4 reconstruction toolchain (T2-T5) and benchmark; M5 corrections and queue result | E94–E101 |
+| [evidence/07_logic_toolchain_m4.md](evidence/07_logic_toolchain_m4.md) | M4 reconstruction toolchain (T2-T5) and benchmark; M5 corrections and queue result | E94–E104 |
 | [evidence/08_tooling_capability.md](evidence/08_tooling_capability.md) | Tooling available on this host (REA, Ghidra, ...) | T1–T8 |
 
-New findings: add the row to the matching pool (next free ID: E102) and extend this table's ID list.
+New findings: add the row to the matching pool (next free ID: E105) and extend this table's ID list.
