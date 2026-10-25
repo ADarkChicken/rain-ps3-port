@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -180,6 +181,13 @@ public static class RainImport
         }
         foreach (var o in sf.objects) gos[o.id].SetActive(o.active);
 
+        // gameplay scripts (M6): reflection-based attach from the raw scene.json scripts{} dicts (JsonUtility can't
+        // deserialize the arbitrary per-class field shape, so we re-parse with MiniJson for this part only).
+        int scriptsOk = 0, scriptsErr = 0;
+        AttachScripts(gos, mats, File.ReadAllText(Path.Combine(src, "scene.json")), ref scriptsOk, ref scriptsErr);
+        Debug.Log("RAIN IMPORT: scripts attached fields=" + scriptsOk + " errors=" + scriptsErr);
+
+
         // lightmaps: applied at runtime by RainLightmaps (index 255 = none; out-of-range indices dropped)
         Lightmapping.giWorkflowMode = Lightmapping.GIWorkflowMode.OnDemand;   // keep the editor from baking over them
         var lm = new GameObject("RainLightmaps").AddComponent<RainLightmaps>();
@@ -247,4 +255,219 @@ public static class RainImport
     }
     static Vector3[] ReadV3(BinaryReader br, int n) { var v = new Vector3[n]; for (int i = 0; i < n; i++) v[i] = new Vector3(br.ReadSingle(), br.ReadSingle(), br.ReadSingle()); return v; }
     static Vector2[] ReadV2(BinaryReader br, int n) { var v = new Vector2[n]; for (int i = 0; i < n; i++) v[i] = new Vector2(br.ReadSingle(), br.ReadSingle()); return v; }
+
+    // --- M6: generic gameplay-script component attach (reconstructed types in Assets/RainRuntime/Recon) ---------
+
+    static Dictionary<string, Type> _typeCache;
+    static Type FindType(string cls)
+    {
+        if (_typeCache == null)
+        {
+            _typeCache = new Dictionary<string, Type>();
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                try { foreach (var t in asm.GetTypes()) if (!_typeCache.ContainsKey(t.Name)) _typeCache[t.Name] = t; }
+                catch (ReflectionTypeLoadException) { }
+        }
+        Type r; return _typeCache.TryGetValue(cls, out r) ? r : null;
+    }
+    static FieldInfo FindField(Type t, string name)
+    {
+        for (var bt = t; bt != null; bt = bt.BaseType)
+        {
+            var fi = bt.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+            if (fi != null) return fi;
+        }
+        return null;
+    }
+    static object ConvertKeyframes(object val)   // decoded {"keys":[[t,v,in,out],...], "pre_post":[a,b]} -> AnimationCurve
+    {
+        var d = (Dictionary<string, object>)val; var keysRaw = (List<object>)d["keys"];
+        var keys = new Keyframe[keysRaw.Count];
+        for (int i = 0; i < keys.Length; i++)
+        {
+            var k = (List<object>)keysRaw[i];
+            keys[i] = new Keyframe(Convert.ToSingle(k[0]), Convert.ToSingle(k[1]), Convert.ToSingle(k[2]), Convert.ToSingle(k[3]));
+        }
+        var curve = new AnimationCurve(keys); var pp = (List<object>)d["pre_post"];
+        curve.preWrapMode = (WrapMode)Convert.ToInt32(pp[0]); curve.postWrapMode = (WrapMode)Convert.ToInt32(pp[1]);
+        return curve;
+    }
+    // resolve a scene-object-id string (file@pathID, as written by rid() in rain_export.py) against whichever table
+    // actually holds it: scene GameObjects first (by far the common case for gameplay fields), else materials.
+    static object ResolveRef(string id, Type fieldType, Dictionary<string, GameObject> gos, Dictionary<string, Material> mats)
+    {
+        if (id == null) return null;
+        GameObject go;
+        if (gos.TryGetValue(id, out go))
+        {
+            if (fieldType == typeof(GameObject)) return go;
+            if (fieldType == typeof(Transform)) return go.transform;
+            if (typeof(Component).IsAssignableFrom(fieldType)) return go.GetComponent(fieldType);
+            return go;
+        }
+        Material mat;
+        if (typeof(Material).IsAssignableFrom(fieldType) && mats.TryGetValue(id, out mat)) return mat;
+        return null;   // texture/other asset refs, or an object outside this level set: not wired yet
+    }
+    static object ConvertValue(object val, Type ft, Dictionary<string, GameObject> gos, Dictionary<string, Material> mats)
+    {
+        if (ft == typeof(string)) return val as string;
+        if (val is string) return ResolveRef((string)val, ft, gos, mats);   // pptr leaf
+        if (val == null) return ft.IsValueType ? Activator.CreateInstance(ft) : null;
+        if (ft.IsEnum) return Enum.ToObject(ft, Convert.ToInt64((double)val));
+        if (ft == typeof(bool)) return Convert.ToBoolean(val);
+        if (ft == typeof(int)) return Convert.ToInt32((double)val);
+        if (ft == typeof(uint)) return Convert.ToUInt32((double)val);
+        if (ft == typeof(long)) return Convert.ToInt64((double)val);
+        if (ft == typeof(float)) return Convert.ToSingle((double)val);
+        if (ft == typeof(double)) return (double)val;
+        if (ft == typeof(byte) || ft == typeof(sbyte) || ft == typeof(short) || ft == typeof(ushort)) return Convert.ChangeType(val, ft);
+        if (ft == typeof(AnimationCurve)) return ConvertKeyframes(val);
+        if (ft == typeof(LayerMask)) { var lm = default(LayerMask); lm.value = Convert.ToInt32((double)val); return lm; }
+        if (val is Dictionary<string, object>)   // [Serializable] inline struct/class: recurse per declared field
+        {
+            var inl = (Dictionary<string, object>)val;
+            object inst = Activator.CreateInstance(ft);
+            foreach (var kv in inl) { var fi = FindField(ft, kv.Key); if (fi != null) fi.SetValue(inst, ConvertValue(kv.Value, fi.FieldType, gos, mats)); }
+            return inst;
+        }
+        var list = val as List<object>;
+        if (list != null)
+        {
+            if (ft == typeof(Color32) && list.Count == 4) return new Color32((byte)Convert.ToInt32(list[0]), (byte)Convert.ToInt32(list[1]), (byte)Convert.ToInt32(list[2]), (byte)Convert.ToInt32(list[3]));
+            if (ft == typeof(Vector2) && list.Count >= 2) return new Vector2(Convert.ToSingle(list[0]), Convert.ToSingle(list[1]));
+            if (ft == typeof(Vector3) && list.Count >= 3) return new Vector3(Convert.ToSingle(list[0]), Convert.ToSingle(list[1]), Convert.ToSingle(list[2]));
+            if (ft == typeof(Vector4) && list.Count >= 4) return new Vector4(Convert.ToSingle(list[0]), Convert.ToSingle(list[1]), Convert.ToSingle(list[2]), Convert.ToSingle(list[3]));
+            if (ft == typeof(Quaternion) && list.Count >= 4) return new Quaternion(Convert.ToSingle(list[0]), Convert.ToSingle(list[1]), Convert.ToSingle(list[2]), Convert.ToSingle(list[3]));
+            if (ft == typeof(Color) && list.Count >= 4) return new Color(Convert.ToSingle(list[0]), Convert.ToSingle(list[1]), Convert.ToSingle(list[2]), Convert.ToSingle(list[3]));
+            if (ft == typeof(Rect) && list.Count >= 4) return new Rect(Convert.ToSingle(list[0]), Convert.ToSingle(list[1]), Convert.ToSingle(list[2]), Convert.ToSingle(list[3]));
+            if (ft == typeof(Bounds) && list.Count >= 6) return new Bounds(new Vector3(Convert.ToSingle(list[0]), Convert.ToSingle(list[1]), Convert.ToSingle(list[2])), 2 * new Vector3(Convert.ToSingle(list[3]), Convert.ToSingle(list[4]), Convert.ToSingle(list[5])));
+            if (ft.IsArray)
+            {
+                var el = ft.GetElementType(); var arr = Array.CreateInstance(el, list.Count);
+                for (int i = 0; i < list.Count; i++) arr.SetValue(ConvertValue(list[i], el, gos, mats), i);
+                return arr;
+            }
+            if (ft.IsGenericType && ft.GetGenericTypeDefinition() == typeof(List<>))
+            {
+                var el = ft.GetGenericArguments()[0]; var lst = (System.Collections.IList)Activator.CreateInstance(ft);
+                foreach (var v in list) lst.Add(ConvertValue(v, el, gos, mats));
+                return lst;
+            }
+            return null;   // unmodelled generic/collection field type
+        }
+        return Convert.ChangeType(val, ft);   // leftover numeric prim (double -> int/float handled above; fallback)
+    }
+    static void AttachScripts(Dictionary<string, GameObject> gos, Dictionary<string, Material> mats, string rawJson, ref int ok, ref int err)
+    {
+        var root = (Dictionary<string, object>)MiniJson.Parse(rawJson);
+        var objs = (List<object>)root["objects"];
+        var compMap = new Dictionary<string, Dictionary<string, object>>();
+        foreach (var ox in objs)
+        {
+            var od = (Dictionary<string, object>)ox; object scriptsObj;
+            if (!od.TryGetValue("scripts", out scriptsObj)) continue;
+            string id = (string)od["id"]; GameObject go;
+            if (!gos.TryGetValue(id, out go)) continue;
+            var scripts = (Dictionary<string, object>)scriptsObj; compMap[id] = scripts;
+            foreach (var cls in scripts.Keys)
+            {
+                var t = FindType(cls);
+                if (t == null) { Debug.LogWarning("RAIN IMPORT: unknown script class " + cls); err++; continue; }
+                if (go.GetComponent(t) == null) go.AddComponent(t);
+            }
+        }
+        foreach (var kv in compMap)
+        {
+            var go = gos[kv.Key];
+            foreach (var ce in kv.Value)
+            {
+                var t = FindType(ce.Key); if (t == null) continue;
+                var comp = go.GetComponent(t); if (comp == null) continue;
+                var fields = (Dictionary<string, object>)ce.Value;
+                foreach (var fe in fields)
+                {
+                    if (fe.Key == "enabled") { var b = comp as Behaviour; if (b != null) b.enabled = Convert.ToBoolean(fe.Value); continue; }
+                    var fi = FindField(t, fe.Key);
+                    if (fi == null) continue;   // field dropped/renamed vs the decompile (rare); leave default
+                    try { fi.SetValue(comp, ConvertValue(fe.Value, fi.FieldType, gos, mats)); ok++; }
+                    catch (Exception e) { Debug.LogWarning("RAIN IMPORT: " + ce.Key + "." + fe.Key + ": " + e.Message); err++; }
+                }
+            }
+        }
+    }
+
+    // Minimal JSON parser (object graph: Dictionary<string,object> / List<object> / string / double / bool / null).
+    // scene.json has no large numeric precision needs here (ids/flags/floats only), so double is enough.
+    static class MiniJson
+    {
+        public static object Parse(string s) { int i = 0; SkipWs(s, ref i); return ParseValue(s, ref i); }
+        static void SkipWs(string s, ref int i) { while (i < s.Length && char.IsWhiteSpace(s[i])) i++; }
+        static object ParseValue(string s, ref int i)
+        {
+            SkipWs(s, ref i);
+            switch (s[i])
+            {
+                case '{': return ParseObject(s, ref i);
+                case '[': return ParseArray(s, ref i);
+                case '"': return ParseString(s, ref i);
+                case 't': i += 4; return true;
+                case 'f': i += 5; return false;
+                case 'n': i += 4; return null;
+                default: return ParseNumber(s, ref i);
+            }
+        }
+        static Dictionary<string, object> ParseObject(string s, ref int i)
+        {
+            var d = new Dictionary<string, object>(); i++; SkipWs(s, ref i);
+            if (s[i] == '}') { i++; return d; }
+            while (true)
+            {
+                SkipWs(s, ref i); string k = ParseString(s, ref i); SkipWs(s, ref i); i++;   // ':'
+                d[k] = ParseValue(s, ref i); SkipWs(s, ref i);
+                if (s[i] == ',') { i++; continue; }
+                i++; break;   // '}'
+            }
+            return d;
+        }
+        static List<object> ParseArray(string s, ref int i)
+        {
+            var l = new List<object>(); i++; SkipWs(s, ref i);
+            if (s[i] == ']') { i++; return l; }
+            while (true)
+            {
+                l.Add(ParseValue(s, ref i)); SkipWs(s, ref i);
+                if (s[i] == ',') { i++; continue; }
+                i++; break;   // ']'
+            }
+            return l;
+        }
+        static string ParseString(string s, ref int i)
+        {
+            i++; var sb = new System.Text.StringBuilder();
+            while (s[i] != '"')
+            {
+                if (s[i] == '\\')
+                {
+                    i++;
+                    switch (s[i])
+                    {
+                        case 'n': sb.Append('\n'); break; case 't': sb.Append('\t'); break; case 'r': sb.Append('\r'); break;
+                        case 'b': sb.Append('\b'); break; case 'f': sb.Append('\f'); break;
+                        case 'u': sb.Append((char)Convert.ToInt32(s.Substring(i + 1, 4), 16)); i += 4; break;
+                        default: sb.Append(s[i]); break;
+                    }
+                    i++;
+                }
+                else sb.Append(s[i++]);
+            }
+            i++; return sb.ToString();
+        }
+        static double ParseNumber(string s, ref int i)
+        {
+            int st = i;
+            while (i < s.Length && (char.IsDigit(s[i]) || s[i] == '-' || s[i] == '+' || s[i] == '.' || s[i] == 'e' || s[i] == 'E')) i++;
+            return double.Parse(s.Substring(st, i - st), System.Globalization.CultureInfo.InvariantCulture);
+        }
+    }
 }

@@ -100,13 +100,39 @@ def write_mesh(path, d, b):
         out += struct.pack(f"<I{len(tris)}I", len(tris), *tris)
     with open(path, "wb") as f: f.write(out)
 
+#: M6 critical-path gameplay classes (work/m6_dependency_map.md) that actually carry MonoBehaviour instances
+#: (work/maps/monobehaviour_decode_summary.csv: all decode byte-exact, 0 failures). Decoded generically below and
+#: attached to their GameObject as o["scripts"][cls] so a later Unity-side importer can restore real components.
+SCRIPT_CLASSES = {
+    "ActiveKeepTrigger", "ActiveSwitchTrigger", "BoyParameter", "CameraConstrainForRainEffect", "CameraManager",
+    "CharacterGesture", "CharacterGestureManager", "CharacterKillTrigger", "CharacterPlayer", "CharacterProperty",
+    "CharacterResetParams", "CharacterShaderConection", "CharacterStatus", "CharacterTaskBase",
+    "CharacterTriggerProperty", "CharacterWatchCollision", "CharacterWatchPoint", "CreateRainDrop",
+    "CreateRefrectionRTT", "DisplayRange", "FootStep", "FourParameter", "Full_billboard", "FunctionEventFlagOFF",
+    "FunctionEventFlagON", "FunctionRestartTriggerSwitch", "FunctionSituation", "GameManager", "GlowAlphaAnimaton",
+    "HeadLookController", "IlluminationCameraController", "KillCameraManager", "LatchConstantRotation",
+    "MapInstantiation", "MapLoader", "MapLoaderEntry", "MotionDataManager", "MotionEvent",
+    "PartialRestartGameObject", "ParticleColorControl", "PathCamera", "PathCameraArea", "PathCameraEventObj",
+    "PathCameraGazePoint", "PathCameraGazePosArea", "PathCameraKeyframe", "PathCameraRouteSet", "PathGraph",
+    "PathManager", "PositionMarker", "PrefabManager", "PushBody", "PushBodyParameter", "RainAreaCheck",
+    "RainEffectManager", "RainFallPaticleController", "RainFallTransformController", "RainManager",
+    "RainMergePostEffect", "RainRenderEffect", "ReflectionCameraEffect", "RegionBox", "RegionManager",
+    "RegionTrigger", "RegionTriggerCameraArea", "RegionTriggerEmitter", "RegionTriggerObjectActivate",
+    "RegionTriggerPuddle", "RegionTriggerText", "RestartManager", "RestartTrigger", "RootMotionComputer",
+    "SafetyFallTrigger", "ScriptPositionManager", "SingletonObject", "SituationTrigger", "SpawnPoint",
+    "SpawnTriggerPass", "SpawnTriggerPassActive", "SpawnTriggerPassDelete", "StageClearTrigger",
+    "TriggerCollisionArea", "TriggerCondition_AlwaysTrue", "TriggerCondition_CharaNameCtrl",
+    "TriggerCondition_CharaTypeCtrl", "TriggerCondition_EventFlag", "TriggerCondition_ExtraState",
+    "TriggerEventFlagON", "TriggerProcessPlayBGM", "TwoParameter", "UIKillCamera", "WetNewspaper", "myBlurEffect",
+}
+
 class Exporter:
     def __init__(self, media, out):
         self.F = Files(media); self.out = out
         for sub in ("textures", "meshes"): os.makedirs(os.path.join(out, sub), exist_ok=True)
         self.objects, self.materials, self.done = [], {}, set()
         self.textures, self.meshes = set(), set(); self.report = collections.Counter(); self.roots = []
-        self.shader_names = {}; self.world = None
+        self.shader_names = {}; self.world = None; self._clsidx = {}
     def shader_name(self, ref):
         if ref is None: return None
         if ref in self.shader_names: return self.shader_names[ref]
@@ -177,6 +203,8 @@ class Exporter:
                 o["camera"]["hasTargetTexture"] = tt is not None
             elif ccid == 114 and (pe := self.post_effect(cref, cb)) is not None:
                 o[pe[0]] = pe[1]
+            elif ccid == 114 and (sc := self.script_component(cref, cb)) is not None:
+                o.setdefault("scripts", {})[sc[0]] = sc[1]
             else:
                 self.report[f"component {ccid} skipped"] += 1
         self.objects.append(o)
@@ -207,6 +235,37 @@ class Exporter:
         for k in ("m_BlendTexture", "maskTexture"):
             if k in v: keep[k] = self.texture(self.F.resolve(cref[0], v[k]))
         return ("rainMerge" if cls == "RainMergePostEffect" else "rainCommon"), keep
+    def _decode_value(self, level, node, val):
+        """JSON-safe form of a decoded field, resolving PPtr(fileID,pathID) leaves to scene.json object ids (rid)."""
+        k = node[0]
+        if k == "pptr": return rid(ref) if (ref := self.F.resolve(level, val)) else None
+        if k in ("floats", "bytes4"): return list(val)
+        if k == "curve": return {"keys": [list(key) for key in val["keys"]], "pre_post": list(val["pre_post"])}
+        if k in ("array", "list"): return [self._decode_value(level, node[1], v) for v in val]
+        if k == "inline":
+            fields = dict(self.world.fields(node[1], node[2]))
+            return {fn: self._decode_value(level, fields[fn], v) for fn, v in val.items()}
+        return val   # prim / string
+    def script_component(self, cref, b):
+        """(className, decoded fields) for any SCRIPT_CLASSES MonoBehaviour component, else None (E40 decoder,
+        generalised from post_effect to the full M6 critical-path class list, work/m6_dependency_map.md)."""
+        if self.world is None: return None
+        if not hasattr(self, "_ms"): self._ms = u.monoscripts(os.path.join(self.F.media, "sharedassets0.assets"))
+        go, en, (fid, spid), name, p = mbd.header(b); ext = self.F.load(cref[0])[1]
+        cls = self._ms.get(spid, ("",))[0]
+        if not (0 < fid <= len(ext) and ext[fid - 1] == "sharedassets0.assets" and cls in SCRIPT_CLASSES): return None
+        if cls not in self._clsidx:
+            a = self.world.asms["Assembly-CSharp"]; self._clsidx[cls] = (a, a.byname.get(("", cls)))
+        a, i = self._clsidx[cls]
+        if not i: self.report[f"script {cls} no_type"] += 1; return None
+        vals = {"enabled": bool(en)}
+        try:
+            for fn, node in self.world.fields(a, i):
+                v, p = mbd.read(self.world, node, b, p)
+                vals[fn] = self._decode_value(cref[0], node, v)
+        except (mbd.Bad, struct.error, IndexError) as e:
+            self.report[f"script {cls} decode error"] += 1; return None
+        return cls, vals
     def monobehaviours(self, level, world, cls):
         """Decoded fields of every `cls` MonoBehaviour (Assembly-CSharp) in a level."""
         ms = u.monoscripts(os.path.join(self.F.media, "sharedassets0.assets")); objs, ext = self.F.load(level)

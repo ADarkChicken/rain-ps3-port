@@ -4,6 +4,10 @@
 // Hidden/RainCommonAdvancedShader (pass 0 with depth correction, pass 1 without), FXAA = Hidden/FXAA2Shader.
 using UnityEngine;
 
+// M6: switch used by PathCamera to pick the colour-correction curve set (sun-shaft/advanced grading, not yet
+// reconstructed as actual rendering below -- stored so the gameplay scripts that set/read it compile and carry data).
+public enum Rain_ColorCorrectionMode { Normal = 0, Advance = 1 }
+
 [ExecuteInEditMode]
 [RequireComponent(typeof(Camera))]
 public class RainCommonPostEffect : MonoBehaviour
@@ -18,6 +22,27 @@ public class RainCommonPostEffect : MonoBehaviour
     public Color globalFogColor, globalFogHeightColor;
     public int m_FXAASampleCount;
     public bool m_SunShaftEnable;   // shortcut: sun shafts (RenderSunShaft) and the shine pass are not reconstructed yet (E92)
+    // M6: sun-shaft parameters (PathCamera/GlobalParam/RouteSet carry these; rendering itself still TODO -- data only).
+    public Vector3 m_SunPosition;
+    public float m_SunShaftIntensityMin, m_SunShaftIntensityMax, m_SunShaftBlurRadius, m_SunCharDarkIntensite;
+    public bool m_SunShaftPause;
+    public Rain_ColorCorrectionMode m_ColorCollectionMode;
+    public void ChangeColorCollectionMode(Rain_ColorCorrectionMode mode) { m_ColorCollectionMode = mode; }
+    public static void CopyParameter(RainCommonPostEffect from, RainCommonPostEffect to)
+    {
+        if (from == null || to == null) return;
+        to.redChannel = from.redChannel; to.greenChannel = from.greenChannel; to.blueChannel = from.blueChannel;
+        to.useDepthCorrection = from.useDepthCorrection;
+        to.zCurve = from.zCurve; to.depthRedChannel = from.depthRedChannel; to.depthGreenChannel = from.depthGreenChannel; to.depthBlueChannel = from.depthBlueChannel;
+        to.maskTexture = from.maskTexture; to.maskColor = from.maskColor; to.maskIntensity = from.maskIntensity;
+        to.globalFogStartDistance = from.globalFogStartDistance; to.globalFogDensity = from.globalFogDensity;
+        to.globalFogHeightScale = from.globalFogHeightScale; to.globalFogHeight = from.globalFogHeight; to.globalFogHeightDensity = from.globalFogHeightDensity; to.globalFogFarClip = from.globalFogFarClip;
+        to.globalFogColor = from.globalFogColor; to.globalFogHeightColor = from.globalFogHeightColor;
+        to.m_FXAASampleCount = from.m_FXAASampleCount; to.m_SunShaftEnable = from.m_SunShaftEnable;
+        to.m_SunPosition = from.m_SunPosition; to.m_SunShaftIntensityMin = from.m_SunShaftIntensityMin; to.m_SunShaftIntensityMax = from.m_SunShaftIntensityMax;
+        to.m_SunShaftBlurRadius = from.m_SunShaftBlurRadius; to.m_SunCharDarkIntensite = from.m_SunCharDarkIntensite; to.m_SunShaftPause = from.m_SunShaftPause;
+        to.m_ColorCollectionMode = from.m_ColorCollectionMode; to.enabled = from.enabled;
+    }
     public Shader ccDepthShader, fxaaShader;   // serialized so player builds include them (the original references materials)
     Material ccDepthMaterial, m_FXAAmaterial;
     Texture2D rgbChannelTex, rgbDepthChannelTex, zCurveTex;

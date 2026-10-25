@@ -27,6 +27,17 @@ public class RainMergePostEffect : MonoBehaviour
     public bool m_UseMergeShader;
     public int m_DownSizeDiv = 3;
     public Shader m_MergeShader;   // serialized so player builds include it (the original references m_MergeMaterial)
+    public static void CopyParameter(RainMergePostEffect from, RainMergePostEffect to)
+    {
+        if (from == null || to == null) return;
+        to.m_GaussIntensity = from.m_GaussIntensity; to.m_UpdateRGBCurve = from.m_UpdateRGBCurve; to.m_RGBCurve = from.m_RGBCurve;
+        to.m_SoftFocusBlendMode = from.m_SoftFocusBlendMode; to.m_SoftFocusBlendIntensity = from.m_SoftFocusBlendIntensity;
+        to.m_ColorVignette = from.m_ColorVignette; to.m_ColorVignetteIntensity = from.m_ColorVignetteIntensity;
+        to.m_BlurVignette = from.m_BlurVignette; to.m_BlurVignetteIntensity = from.m_BlurVignetteIntensity;
+        to.m_BlendTexture = from.m_BlendTexture; to.m_TextureBlendIntensity = from.m_TextureBlendIntensity; to.m_TextureBlendMode = from.m_TextureBlendMode;
+        to.m_SaturationIntensity = from.m_SaturationIntensity; to.m_UseMergeShader = from.m_UseMergeShader; to.m_DownSizeDiv = from.m_DownSizeDiv;
+        to.enabled = from.enabled;
+    }
     Material m_MergeMaterial;
     readonly float[] m_aGaussWeight = new float[9];
     readonly Vector2[] m_aGaussOffset = new Vector2[9];
