@@ -1,6 +1,8 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-10-25 (M5 COMPLETE, 311/311 types. M6 approved; integration started, paused for next session).
+Last updated: 2026-10-26 (M5 COMPLETE, 311/311 types. M6: compile+runtime-import clean; built a headless play-mode
+smoke test and found the real entry point (GameManager's own boot flow); 2 real NullRef bugs + Animation-component
+gaps found via 10 play-mode frames, not yet fixed -- next session).
 
 ## Where we are
 **Phase 5: M0–M4 COMPLETE; M5 (reconstruct the Stage-1 slice closure) APPROVED 2026-10-17, in progress.**
@@ -13,7 +15,75 @@ Last updated: 2026-10-25 (M5 COMPLETE, 311/311 types. M6 approved; integration s
 | M4 Toolchain | **Complete.** T2 field layout/chains, T3 vtable resolver, T4 0 unresolved generic names, T5 lift packets + compile harness; benchmark 44/53 A (83 %), all compile | E94–E96, BENCHMARK_M4.md |
 | M5 Slice logic | **In progress.** Closure (direct calls, level4 + 41 st01 prefabs): 146 script classes → 212 top-level types / 4,339 methods (`work/maps/st01_closure*.csv`). All 238 types decompiled with switch recovery + lifted (`work/decomp_st01`, `work/lift_st01`, local). Layout rule corrected (E97). Queue finished 2026-10-19: 209/212 types full + 3 partial by design, 3878/4339 methods, all compile; replay PASS 1137/FAIL 227 (all environment). Gap: types reached only via fields/inlined accessors are outside the closure (E101) | E97–E101 |
 
-**Exact next action:** M6 (VS-2 "boy walks in the rain") APPROVED 2026-10-25, integration started this session, **paused (token budget) before it compiles** -- resume by picking up the compile-fix step below.
+**Exact next action:** M6 runtime fully working this session: compiles clean (0 errors) AND the real scene import
+completes with **0 AttachScripts/AddComponent exceptions** (was 76 field-set errors + 41 static-init/AddComponent
+crashes at session start). Fixes, in order found (triage method: patched `RainImport.cs`'s catch blocks to log
+`InnerException` + stack trace instead of just `e.Message` -- essential, the bare message was always the generic
+"Exception has been thrown by the target of an invocation."):
+1. `PathGraph.m_NodeArray`/`HeadLookController.segments`/`FourParameter.m_AttackData1-2` etc. (all "Exception...
+   invocation" with `NotImplementedException` from a stub `.ctor`) were constructing instances of types the M6
+   dependency map (`work/m6_dependency_map.md`) mis-bucketed as deferred but that critical-path classes actually
+   depend on at runtime (base classes, composed fields, or static-field-initializer instances, not just AI/audio
+   logic): promoted `AcqGameObject`, `AcqGameObjectManager`, `AcqObject`, `AcqGimmick` (used as a base class by
+   dozens of critical types -- a generic object-registry framework, not Gimmick-specific despite the name),
+   `AIPathNodeSt` (`PathGraph.m_NodeArray` element type), `BendingSegment` (`HeadLookController.segments`),
+   `OBBMisc` (a static field initializer in `PathCameraRouteSet`), `LightMapAdjuster` (a nested-struct field type
+   inside `MapInstantiation.ObjectKind`), `AIParameter` (base of `FourParameter`/`TwoParameter`), `SoundEffect`
+   (base of `FootStep`), `VisibleEmit` (base of `CreateRainDrop`) from `port_unity/_deferred_recon/` back into
+   `Assets/RainRuntime/Recon/` (and `work/m6_dependency_map.md`'s critical list, not yet rewritten there -- do that
+   next session) -- all 11 already had complete M5 reconstructions, just excluded by the too-coarse bucket.
+2. `AttackData` (used by `FourParameter`/`TwoParameter`) was never reconstructed at all (M5's E101 gap: reached only
+   via fields, outside the direct-call closure) -- hand-wrote a trivial real file (`work/recon/AttackData.cs` + a
+   copy in `Recon/`, 4 fields + an enum + an empty ctor, nothing to verify against asm for a field-initializer-only
+   type).
+3. `PushBody.PUSH_MASK` (a `LayerMask`) hit `OverflowException` in `RainImport.cs`'s `ConvertValue`: the decoded
+   value for an all-bits mask arrives as `4294967295.0` (unsigned reading of the int32), and `Convert.ToInt32`
+   can't take that -- fixed with `unchecked((int)Convert.ToInt64(...))`.
+4. **Root-cause fix, not just a patch:** `tools/skeleton_gen.py` was throwing `NotImplementedException` from EVERY
+   generated constructor, including trivial parameterless ones -- but a parameterless ctor can run implicitly
+   (`AddComponent`, array/field element construction, `Activator.CreateInstance`) from code we don't control, so
+   throwing there crashes an unrelated caller instead of just losing fidelity (hit via `CharacterPlayer`'s own field
+   initializer `new CharacterCtrlIdleAI()`, and via `PostEffectsBase()` for `ReflectionCameraEffect`/`myBlurEffect`
+   -- both via types we deliberately keep deferred/placeholder). Fixed in `skeleton_gen.py`'s ctor emission: a
+   zero-parameter `.ctor` now emits `{ }` (never a throw); ctors WITH parameters and all other methods still throw
+   (so a real M5 recon gap still surfaces loudly on replay). Regenerated `work/skeleton/Assembly-CSharp.cs` (full
+   base skeleton) and `_RainEngineStubs.cs` (cross-tier stubs) from the fixed generator.
+Next: find the camera/input entry point to get the boy actually moving, before any RPCS3 side-by-side comparison
+(ask first, per standing rule). Also: rewrite `work/m6_dependency_map.md`'s critical/deferred lists to reflect the
+11 promotions above (currently stale -- still lists them under deferred).
+
+**Entry point found + more runtime fixes (same session, continued):** built `tools/unity/RainPlayTest.cs` (new
+tool, Editor-only, not in the live game): a headless play-mode smoke test. Unity 2017.4 has no "skip domain reload"
+option (that's 2019.3+), and entering Play mode always triggers one, which wipes a plain `EditorApplication.update`
+subscription made before the reload -- use `[InitializeOnLoad]` (its static ctor reruns after every reload) to
+re-subscribe, and `SessionState` (survives the reload) to carry the frame counter/target across it. Usage:
+`Unity.exe -batchmode -projectPath <proj> -executeMethod RainPlayTest.Run -rainScenePath <path> -rainFrames <N>
+-logFile <log>` (no `-quit` -- the script calls `EditorApplication.Exit` itself once done, instead of racing `-quit`
+against the async play-mode transition). Ran 10 play-mode frames of the real import: **confirmed the entry point is
+`GameManager.Start()`'s own boot flow** (no custom bootstrap needed) -- it finds the Player GameObject, drives its
+own state machine (`ChangeState(INIT)` -> `StateInit_Enter()` -> `StartStage()` -> `Placement_Player()`), and by
+frame 10 the Player has a real position and a `PathCamera` is active among 8 scene cameras.
+Found (then fixed, same pattern as the earlier singleton fixups) 6 more deferred singletons whose `GetInstance()`
+critical-path code calls unconditionally: `GameSoundManager`, `WatchPointManager`, `TargetManager`, `DangerManager`,
+`EffectManager` (slightly less trivial -- a real `FindObjectOfType` cache-on-first-call, copied verbatim from its
+already-reconstructed `work/recon/EffectManager.cs`). Also found `UnityEngine.PS3Info`'s methods (ALL of them --
+`MemoryResidenceVertex/DArray/Invoke/Shroud`, `DBOutput`, `SnapInc`, `CurrentMemoryLogout`, `GetRainCustomVersion`,
+`IsAsyncLoading`, `SetLoadingScene`) were throwing even though they're called unconditionally from critical code
+(`GameManager.Start()`'s very first statement is `PS3Info.MemoryResidenceDArray(true)`): these are pure PS3
+hardware memory-residency/debug hints with literally no Windows equivalent, so a no-op IS the correct behavior, not
+a fidelity loss -- patched all 10 to real no-ops (two return sensible defaults: `GetRainCustomVersion()->0`,
+`IsAsyncLoading()->false`). Verified: `NotImplementedException` count over the same 10 frames dropped 245 -> 107
+(all remaining ones now genuinely deferred/out-of-scope: cutscenes, AI, Gimmicks, effects), total exceptions
+766 -> 641, compile still clean, `AttachScripts` still 0 errors.
+**Two real bugs found, NOT fixed yet (user decision: stop here this session)**, both every-frame on many instances:
+`CharacterTaskBase.LateUpdate` NullReferenceException (x228/10 frames) and `LookControllerBase.UpdateSegment`
+NullReferenceException (x216/10 frames, likely a `BendingSegment` field not populated the way `HeadLookController`
+expects -- check `SetupSegments`/the M5 recon against asm). Also ~30 `MissingComponentException`s: several
+`PathCameraRouteSet_*`/map objects expect a legacy `Animation` component the importer doesn't attach (Animator vs.
+Animation mismatch, or a missing importer step for route-clip objects -- check `RainImport.cs`'s `AttachScripts`
+and the M1 exporter's animation handling). Priority for next session: both are on the critical path (player's own
+task/look system, camera route playback) and will visibly block "boy walks, camera follows" even though they don't
+crash the import.
 
 **M6 dependency map** (local only, `work/m6_dependency_map.md`): of the 311 reconstructed types, 152 are critical-path for the walk/camera/region/rain vertical slice (player movement+anim, core game/input/scene loop, PathCamera family, PathGraph/nav, Region*/Trigger*, Rain*/CreateRainDrop); 159 are deferred (AI/enemy behaviour, audio, UI/save/menu -- already done separately, cutscenes, the Gimmick/AcqObject interactive-object system, misc render effects, the AsCommandNew AI-script VM).
 
@@ -21,7 +91,24 @@ Last updated: 2026-10-25 (M5 COMPLETE, 311/311 types. M6 approved; integration s
 
 **Unity-side importer extended, not yet working:** `tools/unity/RainImport.cs` gained a small hand-written MiniJSON parser + reflection-based `AttachScripts()` (generic field setter: Vector/Quaternion/Color/Rect/Bounds/curves/arrays/List<T>/enums/LayerMask/Color32, PPtr fields resolved against the imported GameObjects or materials) so any of the 93 classes' decoded fields can be set on a real attached component without per-class C# boilerplate. Also added (tracked, hand-written, not decompiled): sun-shaft parameter fields + `CopyParameter`/`ChangeColorCollectionMode` on `RainCommonPostEffect`/`RainMergePostEffect` (M3 left these out; PathCamera/GlobalParam/CutSceneManager need them to compile -- data fields only, no actual sun-shaft rendering yet), and `tools/unity/Runtime/_RainEngineStubs.cs` (compile-only empty placeholders for engine-extension types the recon scripts merely *reference*: Unity Standard Assets image effects PostEffectsBase/DepthOfFieldSimple/GlobalFog/GlowEffect/etc., Shroud cloth `ShroudInstance`, PS3 SGX audio wrapper classes, `CutScene`/`CutSceneData`; NOT reconstructed logic).
 
-**Blocked on (compile regression, the actual next step):** copying all 311 recon `.cs` files into `port_unity/Assets/RainRuntime/Recon` (local, gitignored) got compile errors down 349 -> 60 -> 19 -> **3** (all in our own new RainImport.cs code, fixed: a `mcp__patch` fuzzy-match bug kept corrupting a `'\r'` char-literal escape into a raw CR byte -- fixed by direct byte-level edit, verify this way again if it recurs; also one C# 4.0 pattern-matching incompatibility). Then adding `Rain.Firstpass.dll` as a Plugins reference to resolve ~17 leftover cross-tier type names (`CutScene`, `ShroudInstance`, SGX*, `PostEffectsBase`, etc.) caused a NEW regression: it duplicate-defines `RainCommonPostEffect`/`RainMergePostEffect` against our own hand-written versions (CS0433 in the Editor assembly) -- removed the plugin. Stubbing those ~17 names directly (`_RainEngineStubs.cs`) got past the "type not found" errors but then cascaded into **219 member-access errors**: cutscene/Shroud/SGX-audio call sites need real members (properties/methods), not just empty classes -- i.e. compiling these deferred-subsystem files at all requires reconstructing those subsystems, which is out of scope for M6. **Correct fix (not yet done): exclude the 159 deferred-bucket files from `Assets/RainRuntime/Recon` (move them out per the dependency map above) and keep only the 152 critical-path files** -- should return to the "3 errors, all fixed" checkpoint. After that: run the import, check `AttachScripts` field-set counts/errors in the log, then get the boy actually moving (needs a camera/input entry point -- not yet identified) before any RPCS3 side-by-side comparison (ask first, per standing rule).
+**Resolved this session (was "Blocked on"):** excluded the 159 deferred-bucket files from `Assets/RainRuntime/Recon`
+(moved to `port_unity/_deferred_recon/`, outside `Assets/` so Unity ignores them) and regenerated `_Skeleton.cs` for
+the reduced 155-file set (`tools/skeleton_gen.py`'s own `top_level_types()`/comment-out logic, run directly instead
+of via `lift_compile.py`'s temp-file path, writing the result to `work/skeleton/Assembly-CSharp.remainder.cs`).
+That alone surfaced two more gaps, both fixed: (1) `RainCommonPostEffect`/`RainMergePostEffect` are hand-written M3
+files that were never in `Recon/`, so the skeleton re-declared them too -- add their names to the "already has a
+real file" set even though they have no `Recon/*.cs`. (2) the empty `_RainEngineStubs.cs` placeholders weren't
+enough once only critical-path files remained: `CharacterShaderConection`/`PathCamera`/`GameManager`/`SceneManager`/
+etc. (all critical-path, not excludable) call real members on `ShroudInstance`/`CutScene`/`PS3Info`/
+`PS3SystemUtility`/`ColorCorrectionCurves`/`DepthOfFieldSimple`/`DarkenEffect`/`SGXBody`/`SGXHeader` -- empty classes
+aren't enough once something is more than a field type (per the cross-tier-types note below). Fix: `tools/skeleton_gen.py`
+already existed for exactly this (its docstring says "used to generate platform shim stubs") -- ran it with `--only`
+against the real `Rain.Firstpass.dll` (which defines all of these with real members, plus 3 surprises: `AudioClip`/
+`AudioSource`/`CutSceneClip` are the GAME's own global-namespace shim classes in Firstpass, not `UnityEngine`'s) to
+get real signatures, bodies still `NotImplementedException` stubs (same convention as the Assembly-CSharp skeleton,
+not reconstructed logic). Result: 0 compile errors, `RainShaderDiag` withError=0, and a real `RainImport.Run` scene
+import completes end-to-end (see Exact next action above for the remaining 76+41 runtime AttachScripts/static-init
+errors to triage next).
 
 **Previously done (2026-10-25):** M5 reconstruction queue COMPLETE: AsCommandNew (322 stubs, 6 sequential split passes, sonnet-5-5) was the last partial type, all passes compiled clean on the first or second try. RuntimeMisc's last stub (`ObjectArray_NameSort`) was mislabeled `nopacket` by an earlier agent - it actually had a packet (`work/lift_st01/RuntimeMisc.md:1791`, a cost-keyed selection sort) and is now implemented. Queue: 311/311 types done, 5819/5819 methods, 315 recon types, all compile. Replay: PASS 660 / PASS~ 958 / FAIL 121 / FAIL~ 182 / EXC 124 / EXC~ 279 / SKIP 187 (AsCommandNew's AI-script methods aren't exercised by the current replay samples, so no new PASS/FAIL - expected, not a red flag). AsCommandNew `// unverified` highlights: `EnableResistant` BigParameter+0x180 write omitted (no recon field), `Command_AutoMoveAlternativePoint_vs` confirmed correct against the packet (discards `FindNearestPoint`'s result, moves to the original point either way), 1 `sic` (`Command_IsRangeOut_bfu10TargetType` uses `< 0` vs `IsRangeIn`'s `0 <`, asm `blt` confirmed). UI/save/menu track DONE: all 23 UI todo types reconstructed and compiling.
 **Local-only artefacts:** `work/export/st01`, `work/unity_shaders8` (generated shaders, game-derived — never commit), Unity project `G:/Decomp/Rain/port_unity` (runtime scripts from `tools/unity/Runtime/` → `Assets/RainRuntime/`, editor scripts → `Assets/Editor/`).

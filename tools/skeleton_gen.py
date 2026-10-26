@@ -348,7 +348,12 @@ class Gen:
             if kind == "struct" and not ps: return
             if f.mdStatic: return
             simple = ident(str(asm.td[i-1].TypeName).split("`")[0])
-            out.append(f"{ind}{self.access(mr.struct.Flags)} {simple}({pd}){self.ctor_chain(asm, i) if kind == 'class' else ''} {{ throw new global::System.NotImplementedException(); }}"); return
+            # A parameterless ctor can be invoked implicitly (array/field element construction, AddComponent, reflection
+            # Activator.CreateInstance) by code we don't control, so it must not throw -- unlike every other member here,
+            # which only runs if something actually calls it. Real ctor logic for a type we haven't reconstructed is lost
+            # either way; a silent no-op is strictly safer than crashing the whole caller.
+            cbody = "{ }" if not ps else "{ throw new global::System.NotImplementedException(); }"
+            out.append(f"{ind}{self.access(mr.struct.Flags)} {simple}({pd}){self.ctor_chain(asm, i) if kind == 'class' else ''} {cbody}"); return
         if name == "Finalize" and not ps and kind == "class" and f.mdVirtual and not f.mdNewSlot:
             out.append(f"{ind}~{ident(str(asm.td[i-1].TypeName).split('`')[0])}() {{ }}"); return   # C# destructor syntax
         mods = self.mods_for(asm, mi, kind)

@@ -323,7 +323,7 @@ public static class RainImport
         if (ft == typeof(double)) return (double)val;
         if (ft == typeof(byte) || ft == typeof(sbyte) || ft == typeof(short) || ft == typeof(ushort)) return Convert.ChangeType(val, ft);
         if (ft == typeof(AnimationCurve)) return ConvertKeyframes(val);
-        if (ft == typeof(LayerMask)) { var lm = default(LayerMask); lm.value = Convert.ToInt32((double)val); return lm; }
+        if (ft == typeof(LayerMask)) { var lm = default(LayerMask); lm.value = unchecked((int)Convert.ToInt64((double)val)); return lm; }
         if (val is Dictionary<string, object>)   // [Serializable] inline struct/class: recurse per declared field
         {
             var inl = (Dictionary<string, object>)val;
@@ -374,7 +374,15 @@ public static class RainImport
             {
                 var t = FindType(cls);
                 if (t == null) { Debug.LogWarning("RAIN IMPORT: unknown script class " + cls); err++; continue; }
-                if (go.GetComponent(t) == null) go.AddComponent(t);
+                if (go.GetComponent(t) == null)
+                {
+                    try { go.AddComponent(t); }
+                    catch (Exception e)
+                    {
+                        var inner = e; while (inner.InnerException != null) inner = inner.InnerException;
+                        Debug.LogWarning("RAIN IMPORT: AddComponent " + cls + ": " + e.Message + " | inner: " + inner.GetType().Name + ": " + inner.Message + " @ " + inner.StackTrace);
+                    }
+                }
             }
         }
         foreach (var kv in compMap)
@@ -391,7 +399,12 @@ public static class RainImport
                     var fi = FindField(t, fe.Key);
                     if (fi == null) continue;   // field dropped/renamed vs the decompile (rare); leave default
                     try { fi.SetValue(comp, ConvertValue(fe.Value, fi.FieldType, gos, mats)); ok++; }
-                    catch (Exception e) { Debug.LogWarning("RAIN IMPORT: " + ce.Key + "." + fe.Key + ": " + e.Message); err++; }
+                    catch (Exception e)
+                    {
+                        var inner = e; while (inner.InnerException != null) inner = inner.InnerException;
+                        Debug.LogWarning("RAIN IMPORT: " + ce.Key + "." + fe.Key + ": " + e.Message + " | inner: " + inner.GetType().Name + ": " + inner.Message + " @ " + inner.StackTrace);
+                        err++;
+                    }
                 }
             }
         }
