@@ -23,6 +23,15 @@ public static class RainImport
         public int lightmapIndex; public float[] lightmapST; public bool rendererEnabled = true;
         public bool useLightProbes; public string probeAnchor;
         public Cam camera; public Merge rainMerge; public Common rainCommon;
+        public CharCtrl characterController; public Anim animation;
+    }
+    [Serializable] public class CharCtrl
+    {
+        public float height, radius, slopeLimit, stepOffset, skinWidth, minMoveDistance; public float[] center;
+    }
+    [Serializable] public class Anim
+    {
+        public bool enabled, playAutomatically; public int wrapMode;
     }
     [Serializable] public class Cam
     {
@@ -59,9 +68,33 @@ public static class RainImport
         throw new ArgumentException("missing " + name);
     }
     static string Safe(string id) { return id.Replace("@", "_").Replace(" ", "_"); }
+    static void SetExecutionOrderSafe(string className, int order)
+    {
+        foreach (var guid in AssetDatabase.FindAssets(className + " t:MonoScript"))
+        {
+            var path = AssetDatabase.GUIDToAssetPath(guid);
+            var ms = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
+            if (ms != null && ms.GetClass() != null && ms.GetClass().Name == className) { MonoImporter.SetExecutionOrder(ms, order); return; }
+        }
+        Debug.LogWarning("RAIN IMPORT: SetExecutionOrderSafe: MonoScript for " + className + " not found");
+    }
 
     public static void Run()
     {
+        // Script Execution Order: the original PS3 code assumes CharacterBase/CharacterAI's own Start() (which
+        // populates m_CharacterParameter/m_CharacterActionPlayer etc.) has already run before dependent sibling
+        // components (HeadLookController, CharacterTaskBase, LookControllerBase) read those fields -- true on the
+        // original engine's configured order, not guaranteed by Unity's unconfigured default. Set explicitly once
+        // (persists in the project's ScriptExecutionOrder asset).
+        // Execution Order is per the ACTUAL attached MonoBehaviour class, not inherited from a base class'
+        // setting -- CharacterBase/CharacterAI are never attached directly (abstract in practice), only their
+        // concrete subclasses are, so those are the ones that must be ordered early (2026-10-27 fix: the first
+        // attempt set only the abstract base names and had no effect).
+        foreach (var n in new[] { "CharacterPlayer", "CharacterEnemy_Big", "CharacterEnemy_Four", "CharacterEnemy_Small", "CharacterEnemy_Two", "CharacterGirl" })
+            SetExecutionOrderSafe(n, -100);
+        foreach (var n in new[] { "LookControllerBase", "HeadLookController", "CharacterTaskBase", "RootMotionComputer" })
+            SetExecutionOrderSafe(n, -50);
+
         string src = Arg("-rainExport"), sceneName = Arg("-rainScene");
         string root = "Assets/Rain/" + sceneName;
         foreach (var d in new[] { root, root + "/Textures", root + "/Meshes", root + "/Materials" })
@@ -144,6 +177,25 @@ public static class RainImport
             }
         }
         // cameras: data kept for all; only on-screen cameras (no render target, cleared to sky/colour) are enabled
+        foreach (var o in sf.objects)
+        {
+            var cc = o.characterController;
+            if (cc != null)
+            {
+                var ctrl = gos[o.id].AddComponent<CharacterController>();
+                ctrl.height = cc.height; ctrl.radius = cc.radius; ctrl.slopeLimit = cc.slopeLimit; ctrl.stepOffset = cc.stepOffset;
+                ctrl.skinWidth = cc.skinWidth; ctrl.minMoveDistance = cc.minMoveDistance;
+                if (cc.center != null && cc.center.Length == 3) ctrl.center = new Vector3(cc.center[0], cc.center[1], cc.center[2]);
+            }
+            var an = o.animation;
+            if (an != null)
+            {
+                // clip playback not wired yet (no AnimationClip asset pipeline) -- an empty, enabled component is
+                // enough to satisfy GetComponent<Animation>() and stop MissingComponentException (M6 2026-10-27).
+                var anim = gos[o.id].AddComponent<Animation>();
+                anim.enabled = an.enabled; anim.playAutomatically = an.playAutomatically; anim.wrapMode = (WrapMode)an.wrapMode;
+            }
+        }
         foreach (var o in sf.objects)
         {
             var c = o.camera; if (c == null || c.background == null || c.background.Length != 4) continue;

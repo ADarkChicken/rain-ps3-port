@@ -105,11 +105,12 @@ def write_mesh(path, d, b):
 #: attached to their GameObject as o["scripts"][cls] so a later Unity-side importer can restore real components.
 SCRIPT_CLASSES = {
     "ActiveKeepTrigger", "ActiveSwitchTrigger", "BoyParameter", "CameraConstrainForRainEffect", "CameraManager",
-    "CharacterGesture", "CharacterGestureManager", "CharacterKillTrigger", "CharacterPlayer", "CharacterProperty",
-    "CharacterResetParams", "CharacterShaderConection", "CharacterStatus", "CharacterTaskBase",
+    "CharacterAI", "CharacterEnemy_Big", "CharacterEnemy_Four", "CharacterEnemy_Small", "CharacterEnemy_Two",
+    "CharacterActionPlayer", "CharacterGesture", "CharacterGestureManager", "CharacterGirl", "CharacterKillTrigger", "CharacterPlayer",
+    "CharacterParameter", "CharacterProperty", "CharacterResetParams", "CharacterShaderConection", "CharacterStatus", "CharacterTaskBase",
     "CharacterTriggerProperty", "CharacterWatchCollision", "CharacterWatchPoint", "CreateRainDrop",
     "CreateRefrectionRTT", "DisplayRange", "FootStep", "FourParameter", "Full_billboard", "FunctionEventFlagOFF",
-    "FunctionEventFlagON", "FunctionRestartTriggerSwitch", "FunctionSituation", "GameManager", "GlowAlphaAnimaton",
+    "FunctionEventFlagON", "FunctionRestartTriggerSwitch", "FunctionSituation", "GameManager", "GirlParameter", "GlowAlphaAnimaton",
     "HeadLookController", "IlluminationCameraController", "KillCameraManager", "LatchConstantRotation",
     "MapInstantiation", "MapLoader", "MapLoaderEntry", "MotionDataManager", "MotionEvent",
     "PartialRestartGameObject", "ParticleColorControl", "PathCamera", "PathCameraArea", "PathCameraEventObj",
@@ -201,6 +202,16 @@ class Exporter:
                 d = c.camera(c.R(cb)); tt = self.F.resolve(cref[0], d["targetTexture"])
                 o["camera"] = {k: (list(v) if isinstance(v, tuple) else v) for k, v in d.items() if k not in ("go", "targetTexture")}
                 o["camera"]["hasTargetTexture"] = tt is not None
+            elif ccid == 143:
+                d = c.charactercontroller(c.R(cb))
+                o["characterController"] = {"height": d["height"], "radius": d["radius"], "slopeLimit": d["slopeLimit"],
+                                             "stepOffset": d["stepOffset"], "skinWidth": d["skinWidth"],
+                                             "minMoveDistance": d["minMoveDistance"], "center": list(d["center"])}
+            elif ccid == 111:
+                d = c.animation(c.R(cb))
+                o["animation"] = {"enabled": d["enabled"], "wrapMode": d["wrapMode"], "playAutomatically": d["playAutomatically"]}
+                # clip PPtrs not resolved/exported yet (no AnimationClip asset pipeline) -- empty Animation component
+                # is enough to stop MissingComponentException; clip playback fidelity is a separate, bigger task.
             elif ccid == 114 and (pe := self.post_effect(cref, cb)) is not None:
                 o[pe[0]] = pe[1]
             elif ccid == 114 and (sc := self.script_component(cref, cb)) is not None:
@@ -236,9 +247,21 @@ class Exporter:
             if k in v: keep[k] = self.texture(self.F.resolve(cref[0], v[k]))
         return ("rainMerge" if cls == "RainMergePostEffect" else "rainCommon"), keep
     def _decode_value(self, level, node, val):
-        """JSON-safe form of a decoded field, resolving PPtr(fileID,pathID) leaves to scene.json object ids (rid)."""
+        """JSON-safe form of a decoded field, resolving PPtr(fileID,pathID) leaves to scene.json object ids (rid).
+        A PPtr field typed as a Component (not GameObject) stores a direct pointer to that component object, not
+        to its owning GameObject -- scene.json only lists GameObjects, so resolve one level further via the
+        component's own leading m_GameObject PPtr (every Unity Component's first serialized field, Component
+        base) and emit the owner's id instead; RainImport.cs's ResolveRef already does GetComponent(fieldType) on
+        whatever id it gets, so pointing it at the owner GameObject is all that's needed (2026-10-27 fix)."""
         k = node[0]
-        if k == "pptr": return rid(ref) if (ref := self.F.resolve(level, val)) else None
+        if k == "pptr":
+            ref = self.F.resolve(level, val)
+            if not ref: return None
+            cid, b = self.F.get(ref)
+            if cid != 1 and len(b) >= 8:   # not a GameObject: resolve its owning GameObject instead
+                owner = self.F.resolve(ref[0], struct.unpack(">ii", b[:8]))
+                if owner: ref = owner
+            return rid(ref)
         if k in ("floats", "bytes4"): return list(val)
         if k == "curve": return {"keys": [list(key) for key in val["keys"]], "pre_post": list(val["pre_post"])}
         if k in ("array", "list"): return [self._decode_value(level, node[1], v) for v in val]

@@ -1,8 +1,8 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-10-26 (M5 COMPLETE, 311/311 types. M6: compile+runtime-import clean; built a headless play-mode
-smoke test and found the real entry point (GameManager's own boot flow); 2 real NullRef bugs + Animation-component
-gaps found via 10 play-mode frames, not yet fixed -- next session).
+Last updated: 2026-10-27 (M5 COMPLETE, 311/311 types. M6: the 2 real NullRef bugs + Animation-component gap from
+2026-10-26 are now fixed and verified via headless play-mode test, 0 live-game time used; new deeper gaps found
+and fixed along the way; 2 remaining NullRefs are genuinely out-of-scope render/animation subsystems, not bugs).
 
 ## Where we are
 **Phase 5: M0–M4 COMPLETE; M5 (reconstruct the Stage-1 slice closure) APPROVED 2026-10-17, in progress.**
@@ -15,75 +15,57 @@ gaps found via 10 play-mode frames, not yet fixed -- next session).
 | M4 Toolchain | **Complete.** T2 field layout/chains, T3 vtable resolver, T4 0 unresolved generic names, T5 lift packets + compile harness; benchmark 44/53 A (83 %), all compile | E94–E96, BENCHMARK_M4.md |
 | M5 Slice logic | **In progress.** Closure (direct calls, level4 + 41 st01 prefabs): 146 script classes → 212 top-level types / 4,339 methods (`work/maps/st01_closure*.csv`). All 238 types decompiled with switch recovery + lifted (`work/decomp_st01`, `work/lift_st01`, local). Layout rule corrected (E97). Queue finished 2026-10-19: 209/212 types full + 3 partial by design, 3878/4339 methods, all compile; replay PASS 1137/FAIL 227 (all environment). Gap: types reached only via fields/inlined accessors are outside the closure (E101) | E97–E101 |
 
-**Exact next action:** M6 runtime fully working this session: compiles clean (0 errors) AND the real scene import
-completes with **0 AttachScripts/AddComponent exceptions** (was 76 field-set errors + 41 static-init/AddComponent
-crashes at session start). Fixes, in order found (triage method: patched `RainImport.cs`'s catch blocks to log
-`InnerException` + stack trace instead of just `e.Message` -- essential, the bare message was always the generic
-"Exception has been thrown by the target of an invocation."):
-1. `PathGraph.m_NodeArray`/`HeadLookController.segments`/`FourParameter.m_AttackData1-2` etc. (all "Exception...
-   invocation" with `NotImplementedException` from a stub `.ctor`) were constructing instances of types the M6
-   dependency map (`work/m6_dependency_map.md`) mis-bucketed as deferred but that critical-path classes actually
-   depend on at runtime (base classes, composed fields, or static-field-initializer instances, not just AI/audio
-   logic): promoted `AcqGameObject`, `AcqGameObjectManager`, `AcqObject`, `AcqGimmick` (used as a base class by
-   dozens of critical types -- a generic object-registry framework, not Gimmick-specific despite the name),
-   `AIPathNodeSt` (`PathGraph.m_NodeArray` element type), `BendingSegment` (`HeadLookController.segments`),
-   `OBBMisc` (a static field initializer in `PathCameraRouteSet`), `LightMapAdjuster` (a nested-struct field type
-   inside `MapInstantiation.ObjectKind`), `AIParameter` (base of `FourParameter`/`TwoParameter`), `SoundEffect`
-   (base of `FootStep`), `VisibleEmit` (base of `CreateRainDrop`) from `port_unity/_deferred_recon/` back into
-   `Assets/RainRuntime/Recon/` (and `work/m6_dependency_map.md`'s critical list, not yet rewritten there -- do that
-   next session) -- all 11 already had complete M5 reconstructions, just excluded by the too-coarse bucket.
-2. `AttackData` (used by `FourParameter`/`TwoParameter`) was never reconstructed at all (M5's E101 gap: reached only
-   via fields, outside the direct-call closure) -- hand-wrote a trivial real file (`work/recon/AttackData.cs` + a
-   copy in `Recon/`, 4 fields + an enum + an empty ctor, nothing to verify against asm for a field-initializer-only
-   type).
-3. `PushBody.PUSH_MASK` (a `LayerMask`) hit `OverflowException` in `RainImport.cs`'s `ConvertValue`: the decoded
-   value for an all-bits mask arrives as `4294967295.0` (unsigned reading of the int32), and `Convert.ToInt32`
-   can't take that -- fixed with `unchecked((int)Convert.ToInt64(...))`.
-4. **Root-cause fix, not just a patch:** `tools/skeleton_gen.py` was throwing `NotImplementedException` from EVERY
-   generated constructor, including trivial parameterless ones -- but a parameterless ctor can run implicitly
-   (`AddComponent`, array/field element construction, `Activator.CreateInstance`) from code we don't control, so
-   throwing there crashes an unrelated caller instead of just losing fidelity (hit via `CharacterPlayer`'s own field
-   initializer `new CharacterCtrlIdleAI()`, and via `PostEffectsBase()` for `ReflectionCameraEffect`/`myBlurEffect`
-   -- both via types we deliberately keep deferred/placeholder). Fixed in `skeleton_gen.py`'s ctor emission: a
-   zero-parameter `.ctor` now emits `{ }` (never a throw); ctors WITH parameters and all other methods still throw
-   (so a real M5 recon gap still surfaces loudly on replay). Regenerated `work/skeleton/Assembly-CSharp.cs` (full
-   base skeleton) and `_RainEngineStubs.cs` (cross-tier stubs) from the fixed generator.
-Next: find the camera/input entry point to get the boy actually moving, before any RPCS3 side-by-side comparison
-(ask first, per standing rule). Also: rewrite `work/m6_dependency_map.md`'s critical/deferred lists to reflect the
-11 promotions above (currently stale -- still lists them under deferred).
+**Exact next action:** the 2 real bugs flagged 2026-10-26 (`CharacterTaskBase.LateUpdate` NullRef x228/10 frames,
+`LookControllerBase.UpdateSegment` NullRef x216/10 frames) plus the ~194 `MissingComponentException` "no Animation
+attached" gap are now FIXED and verified via headless play-mode test (`tools/unity/RainPlayTest.cs`), 0 live-game
+time used. Root causes and fixes, in order found:
+1. Both NullRefs traced to `work/m6_dependency_map.md`'s "AI/enemies (no NPCs in walk-only scene)" bucket being
+   wrong -- NPC GameObjects (`c_four_01_*`, `c_two_01`, `c_girl_Scene01`) ARE present in st01 even though their AI
+   behavior isn't needed; their real controller class (`CharacterAI` + concrete subclasses
+   `CharacterEnemy_Big/Four/Small/Two`/`CharacterGirl`, all already fully M5-reconstructed) was excluded, so
+   `GetComponent<CharacterBase>()` returned null. Promoted all 6 to critical/`SCRIPT_CLASSES`.
+2. One level deeper (`RootMotionComputer.ComputeRootMotion`): `CharacterActionPlayer`/`ActionData` were
+   mis-bucketed under "AI-script VM (NPC scripting)" even though `CharacterActionPlayer` is the fundamental
+   "which motion is playing" component every character (player included) has, and has no dependency on the real
+   AI-VM (`AsBrain`/`AsCommandNew`/etc., correctly still deferred). Promoted both.
+3. One level deeper still (`HeadLookController.Initialize`, `charBase.m_CharacterParameter` null): two causes --
+   (a) Unity's Script Execution Order is per the *concrete* attached class, not an inherited base setting
+   (`CharacterBase`/`CharacterAI` are never directly attached, only their subclasses are) -- `RainImport.cs` now
+   sets execution order on `CharacterPlayer`/`CharacterEnemy_*`/`CharacterGirl` (early) vs
+   `LookControllerBase`/`HeadLookController`/`CharacterTaskBase`/`RootMotionComputer` (after); (b) `GirlParameter`
+   (same already-critical `AIParameter` family as `FourParameter`/`TwoParameter`) was the one remaining missing
+   promotion, needed for `c_girl_Scene01`'s `CharacterParameter` to resolve via inheritance.
+4. `RestartManager.GetCurrentRestartTransform` NullRef: found a general exporter bug, not a bucketing gap -- a
+   PPtr field typed as a *Component* (e.g. `RestartTrigger`) stores a direct pointer to that component object,
+   not to its owning GameObject, but `scene.json` only lists GameObjects. Fixed in `tools/rain_export.py`'s
+   `_decode_value`: a PPtr leaf whose resolved object isn't a GameObject (classID != 1) now resolves one level
+   further via that component's own leading `m_GameObject` field (every Unity Component's first serialized field)
+   -- a general fix benefiting any other component-typed PPtr field project-wide, not special-cased.
+5. The `MissingComponentException` "no Animation"/CharacterController gaps: wrote and **validated byte-exact**
+   native binary readers for Unity's `CharacterController` (classID 143, 83/83 instances exact project-wide) and
+   `Animation` (classID 111, 1553/1553 instances exact project-wide) in `tools/unity35_classes.py` (neither had a
+   reader before -- both were just silently skipped by the exporter). Wired into `rain_export.py` + `RainImport.cs`.
+   Animation clip *playback* is deliberately not wired yet (no AnimationClip asset pipeline) -- an empty enabled
+   component is enough to stop the crash; clip fidelity is separate, bigger scope.
 
-**Entry point found + more runtime fixes (same session, continued):** built `tools/unity/RainPlayTest.cs` (new
-tool, Editor-only, not in the live game): a headless play-mode smoke test. Unity 2017.4 has no "skip domain reload"
-option (that's 2019.3+), and entering Play mode always triggers one, which wipes a plain `EditorApplication.update`
-subscription made before the reload -- use `[InitializeOnLoad]` (its static ctor reruns after every reload) to
-re-subscribe, and `SessionState` (survives the reload) to carry the frame counter/target across it. Usage:
-`Unity.exe -batchmode -projectPath <proj> -executeMethod RainPlayTest.Run -rainScenePath <path> -rainFrames <N>
--logFile <log>` (no `-quit` -- the script calls `EditorApplication.Exit` itself once done, instead of racing `-quit`
-against the async play-mode transition). Ran 10 play-mode frames of the real import: **confirmed the entry point is
-`GameManager.Start()`'s own boot flow** (no custom bootstrap needed) -- it finds the Player GameObject, drives its
-own state machine (`ChangeState(INIT)` -> `StateInit_Enter()` -> `StartStage()` -> `Placement_Player()`), and by
-frame 10 the Player has a real position and a `PathCamera` is active among 8 scene cameras.
-Found (then fixed, same pattern as the earlier singleton fixups) 6 more deferred singletons whose `GetInstance()`
-critical-path code calls unconditionally: `GameSoundManager`, `WatchPointManager`, `TargetManager`, `DangerManager`,
-`EffectManager` (slightly less trivial -- a real `FindObjectOfType` cache-on-first-call, copied verbatim from its
-already-reconstructed `work/recon/EffectManager.cs`). Also found `UnityEngine.PS3Info`'s methods (ALL of them --
-`MemoryResidenceVertex/DArray/Invoke/Shroud`, `DBOutput`, `SnapInc`, `CurrentMemoryLogout`, `GetRainCustomVersion`,
-`IsAsyncLoading`, `SetLoadingScene`) were throwing even though they're called unconditionally from critical code
-(`GameManager.Start()`'s very first statement is `PS3Info.MemoryResidenceDArray(true)`): these are pure PS3
-hardware memory-residency/debug hints with literally no Windows equivalent, so a no-op IS the correct behavior, not
-a fidelity loss -- patched all 10 to real no-ops (two return sensible defaults: `GetRainCustomVersion()->0`,
-`IsAsyncLoading()->false`). Verified: `NotImplementedException` count over the same 10 frames dropped 245 -> 107
-(all remaining ones now genuinely deferred/out-of-scope: cutscenes, AI, Gimmicks, effects), total exceptions
-766 -> 641, compile still clean, `AttachScripts` still 0 errors.
-**Two real bugs found, NOT fixed yet (user decision: stop here this session)**, both every-frame on many instances:
-`CharacterTaskBase.LateUpdate` NullReferenceException (x228/10 frames) and `LookControllerBase.UpdateSegment`
-NullReferenceException (x216/10 frames, likely a `BendingSegment` field not populated the way `HeadLookController`
-expects -- check `SetupSegments`/the M5 recon against asm). Also ~30 `MissingComponentException`s: several
-`PathCameraRouteSet_*`/map objects expect a legacy `Animation` component the importer doesn't attach (Animator vs.
-Animation mismatch, or a missing importer step for route-clip objects -- check `RainImport.cs`'s `AttachScripts`
-and the M1 exporter's animation handling). Priority for next session: both are on the critical path (player's own
-task/look system, camera route playback) and will visibly block "boy walks, camera follows" even though they don't
-crash the import.
+Remaining NullRefs (21, down from 224) all now trace to genuinely out-of-scope subsystems, not wiring bugs (both
+match the original PS3 asm's own unconditional-access shape, i.e. not recon errors):
+- 19x `LookControllerBase.MakeWindingActionOrgLocal` (`cur.weight` on a null `AnimationState`) -- needs the real
+  AnimationClip playback pipeline (same gap as above, one level deeper: an attached-but-empty Animation component
+  has nothing to return from `GetPlayAnimationState()`).
+- 2x `RainRenderEffect.Start`/`IlluminationCameraController.Start` (`GetComponent<Camera>().targetTexture.width`)
+  -- these special post-process cameras need a real `RenderTexture` asset generated and assigned, which
+  `RainImport.cs`'s camera import currently only tracks as a bool flag (`hasTargetTexture`). Same deferred bucket
+  as M3's already-known VS-2 carryover (wet reflections, sun shafts, DOF).
+
+0 compile errors, 0 AttachScripts errors throughout. 311/311 M5 types still compile clean
+(`tools/lift_compile.py`). `work/m6_dependency_map.md` updated with 4 new promotion entries (2026-10-27 dates);
+rewrite its stale "11 promotions" 2026-10-26 reference next time it's touched, not urgent.
+
+Next real decision point: either build the AnimationClip import pipeline (bigger, new RE-adjacent scope -- ask
+first) to get real motion playback, or move on to validating the actual "boy walks, camera follows" loop with a
+live RPCS3/Unity side-by-side session (needs the user; ask before starting).
+
 
 **M6 dependency map** (local only, `work/m6_dependency_map.md`): of the 311 reconstructed types, 152 are critical-path for the walk/camera/region/rain vertical slice (player movement+anim, core game/input/scene loop, PathCamera family, PathGraph/nav, Region*/Trigger*, Rain*/CreateRainDrop); 159 are deferred (AI/enemy behaviour, audio, UI/save/menu -- already done separately, cutscenes, the Gimmick/AcqObject interactive-object system, misc render effects, the AsCommandNew AI-script VM).
 

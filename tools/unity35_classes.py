@@ -115,7 +115,24 @@ def camera(r):
          "cullingMask": r.u32(), "renderingPath": r.i32(), "targetTexture": r.pptr(), "hdr": r.boolean()}   # no trailing pad
     return d
 
-READERS = {20: camera, 197: lightprobes, 104: rendersettings, 157: lightmapsettings, 48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material}
+def charactercontroller(r):
+    # validated byte-exact on all 83 PS3 instances (2026-10-27): PPtr<GameObject> + 9 floats, no enabled/material/
+    # isTrigger fields in this Unity 3.5.8 build (unlike later Unity versions' Collider base layout).
+    d = {"go": r.pptr(), "height": r.f32(), "radius": r.f32(), "slopeLimit": r.f32(), "stepOffset": r.f32(),
+         "skinWidth": r.f32(), "minMoveDistance": r.f32(), "center": r.fs(3)}
+    return d
+
+def animation(r):
+    # validated byte-exact on all 1553 PS3 instances (2026-10-27): rest-after-clips is always exactly 36 bytes
+    # regardless of clip count (1..263), confirming the array length is read correctly. Only the first two
+    # trailing ints are understood (wrapMode, playAutomatically-as-bool-in-top-byte); the remaining 7 are kept
+    # raw/unparsed (not needed for M6 -- no clip-fidelity playback yet, just stops MissingComponentException).
+    d = {"go": r.pptr(), "enabled": (r.boolean(), r.align())[0], "defaultClip": r.pptr(), "clips": r.vec(r.pptr)}
+    d["wrapMode"] = r.i32(); d["playAutomatically"] = (r.boolean(), r.align())[0]
+    r.p += 28   # 7 more i32: animatePhysics/animateOnlyIfVisible/unknown -- raw, not modelled yet
+    return d
+
+READERS = {20: camera, 197: lightprobes, 104: rendersettings, 157: lightmapsettings, 48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material, 143: charactercontroller, 111: animation}
 
 def validate(media, cids, dump=0):
     files = sorted(glob.glob(os.path.join(media, "level*"))) + sorted(glob.glob(os.path.join(media, "*.assets"))) \
