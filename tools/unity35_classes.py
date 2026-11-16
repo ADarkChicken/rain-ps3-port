@@ -164,7 +164,44 @@ def resourcemanager(r):   # m_Container: Resources.Load path (lower-case, no ext
     return {"container": [(r.string(), r.pptr()) for _ in range(r.count())],
             "dependentAssets": [(r.pptr(), r.vec(r.pptr)) for _ in range(r.count())]}
 
-READERS = {20: camera, 197: lightprobes, 104: rendersettings, 157: lightmapsettings, 48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material, 143: charactercontroller, 111: animation, 74: animationclip, 49: textasset, 147: resourcemanager}
+def inputmanager(r):   # 13: m_Axes (Unity 3.5 InputAxis, no serializedVersion field in the binary)
+    def axis():
+        d = {k: r.string() for k in ("name", "descriptiveName", "descriptiveNegativeName", "negativeButton", "positiveButton",
+                                     "altNegativeButton", "altPositiveButton")}
+        d["gravity"], d["dead"], d["sensitivity"] = r.fs(3); d["snap"] = r.boolean(); d["invert"] = r.boolean(); r.align()
+        d["type"] = r.i32(); d["axis"] = r.i32(); d["joyNum"] = r.i32(); return d
+    return {"axes": [axis() for _ in range(r.count())]}
+
+def _collider(r):   # Collider base: isTrigger + enabled share one aligned word (enabled = 1 on 5,464 of 5,768 colliders)
+    d = {"go": r.pptr(), "material": r.pptr(), "isTrigger": r.boolean(), "enabled": r.boolean()}; r.align(); return d
+def boxcollider(r): d = _collider(r); d["size"] = r.fs(3); d["center"] = r.fs(3); return d
+def spherecollider(r): d = _collider(r); d["radius"] = r.f32(); d["center"] = r.fs(3); return d
+def capsulecollider(r): d = _collider(r); d["radius"] = r.f32(); d["height"] = r.f32(); d["direction"] = r.i32(); d["center"] = r.fs(3); return d
+def meshcollider(r):
+    d = _collider(r); d["smoothSphereCollisions"] = r.boolean(); d["convex"] = r.boolean(); d["_pad2"] = (r.u8(), r.u8()); d["mesh"] = r.pptr(); return d
+def rigidbody(r):
+    d = {"go": r.pptr(), "mass": r.f32(), "drag": r.f32(), "angularDrag": r.f32(), "useGravity": r.boolean(), "isKinematic": r.boolean(),
+         "interpolate": r.u8(), "_pad": r.u8(), "constraints": r.i32(), "collisionDetection": r.i32()}
+    return d
+
+def tagmanager(r):   # 78: user tags (GameObject.m_Tag = 20000 + index), then the 32 layer names
+    return {"tags": [r.string() for _ in range(r.count())], "layers": [r.string() for _ in range(32)]}
+def physicsmanager(r):   # 55
+    d = {"gravity": r.fs(3), "defaultMaterial": r.pptr(), "bounceThreshold": r.f32(), "sleepVelocity": r.f32(),
+         "sleepAngularVelocity": r.f32(), "maxAngularVelocity": r.f32(), "minPenetrationForPenalty": r.f32(),
+         "solverIterationCount": r.i32(), "raycastsHitTriggers": (r.boolean(), r.align())[0]}
+    d["layerCollisionMatrix"] = [r.u32() for _ in range(r.count())]; return d
+def timemanager(r): return {"fixedTimestep": r.f32(), "maximumAllowedTimestep": r.f32(), "timeScale": r.f32()}
+
+def skinnedmeshrenderer(r):
+    # 137: Renderer base + quality, updateWhenOffscreen, mesh, bones, a PPtr<Transform> (root bone; null on some),
+    # AABB (center, extent), trailing bool (last field, no pad). bones == mesh bindPose count on every instance checked.
+    d = renderer_base(r)
+    d["quality"] = r.i32(); d["updateWhenOffscreen"] = (r.boolean(), r.align())[0]
+    d["mesh"] = r.pptr(); d["bones"] = r.vec(r.pptr); d["rootBone"] = r.pptr(); d["aabb"] = r.fs(6); d["dirtyAABB"] = r.boolean()
+    return d
+
+READERS = {20: camera, 197: lightprobes, 104: rendersettings, 157: lightmapsettings, 48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material, 143: charactercontroller, 111: animation, 74: animationclip, 49: textasset, 147: resourcemanager, 13: inputmanager, 65: boxcollider, 135: spherecollider, 136: capsulecollider, 64: meshcollider, 54: rigidbody, 78: tagmanager, 55: physicsmanager, 5: timemanager, 137: skinnedmeshrenderer}
 
 def validate(media, cids, dump=0):
     files = sorted(glob.glob(os.path.join(media, "level*"))) + sorted(glob.glob(os.path.join(media, "*.assets"))) \

@@ -1,8 +1,7 @@
 # PROJECT STATUS: Rain (PS3 → Windows x64)
 
-Last updated: 2026-11-16 (M5 COMPLETE. M6: AnimationClip pipeline built and verified headless -- 2,008/2,008 clips
-byte-exact, 400 st01 clips imported as legacy .anim, motion/action tables load; nothing plays yet because the game
-loop does not drive the characters -- see Exact next action).
+Last updated: 2026-11-16 (M5 COMPLETE. M6: st01 runs headless with real managers, physics, colliders, skinned meshes and
+animation clips -- 4 exceptions/30 frames, boy idles on the ground, x64 player builds; needs a live look next).
 
 ## Where we are
 **Phase 5: M0–M4 COMPLETE; M5 (reconstruct the Stage-1 slice closure) APPROVED 2026-10-17, in progress.**
@@ -15,62 +14,63 @@ loop does not drive the characters -- see Exact next action).
 | M4 Toolchain | **Complete.** T2 field layout/chains, T3 vtable resolver, T4 0 unresolved generic names, T5 lift packets + compile harness; benchmark 44/53 A (83 %), all compile | E94–E96, BENCHMARK_M4.md |
 | M5 Slice logic | **In progress.** Closure (direct calls, level4 + 41 st01 prefabs): 146 script classes → 212 top-level types / 4,339 methods (`work/maps/st01_closure*.csv`). All 238 types decompiled with switch recovery + lifted (`work/decomp_st01`, `work/lift_st01`, local). Layout rule corrected (E97). Queue finished 2026-10-19: 209/212 types full + 3 partial by design, 3878/4339 methods, all compile; replay PASS 1137/FAIL 227 (all environment). Gap: types reached only via fields/inlined accessors are outside the closure (E101) | E97–E101 |
 
-**Exact next action:** AnimationClip import pipeline BUILT and verified headless (2026-11-16, user-approved
-direction; 0 live-game time). What exists now:
-- `tools/unity35_classes.py`: `animationclip` (74) reader, byte-exact on 2,008/2,008 clips project-wide (E106). Legacy
-  3.5 layout; the game has NO compressed rotation curves, NO AnimationEvents, no Animator/Mecanim at all. Also new,
-  both byte-exact: `textasset` (49, 50/50) and `resourcemanager` (147, 1/1: Resources.Load path table).
-- `tools/rain_export.py`: `clips/<id>.bin` (all rotation/position/scale/float curves, original keys + slopes, nothing
-  resampled), Animation components now carry `defaultClip`/`clips`, AnimationClip- and TextAsset-typed script fields
-  resolve (e.g. `PathCameraRouteSet.m_AnimationClip`), `textassets/`, `resources/` (the 48 Resources.Load-able
-  TextAssets incl. `Motion/ActionData`), and `--resident=level0` (ResidentScenePS3 manager objects: MotionDataManager,
-  CharacterGestureManager, PushBodyParameter). **Export command is now `... level4 $PL --resident=level0`.**
-- `tools/unity/RainImport.cs`: builds legacy `.anim` assets (`Assets/Rain/st01/Clips/<clip name>.anim`, 400 clips,
-  78,379 curves, 0 skipped; float curves bound to Camera/Material/Rigidbody/the MonoBehaviour class named by the
-  clip's MonoScript), `Animation.AddClip` + default clip, TextAsset/AnimationClip field refs, Resources tree copy,
-  and `CharacterActionPlayer` execution order -75 (must Start before HeadLookController, -50).
-- 3 trivial data classes promoted with real ctor bodies from a targeted Ghidra run (`EffMotionEvent`,
-  `SEMotionEvent`, `ActionMotionEvent`: `MotionDataManager.MakeMotionList` constructs them; they were outside the M5
-  closure, skeleton-only). `work/recon` is now 318 files; `m6_skeleton_fixups.py` gained GetInstance fixups for
-  `GimmickManager`/`TutorialTextManager`. New helper `tools/unity_log_tally.py <log> [N] [frames]`.
-- Verified in play mode: motion table loads (782 motions), ActionData resolves per character type (boy idle =
-  `boy_01_idl_00_lp`), every character's Animation has its states (Player 151, girl 137, four 38, two 17); sampling
-  `boy_01_idl_00_lp` at a key time returns the exported key value on every one of its bone paths (all paths found).
-  Playtest exceptions/10 frames: 475 -> 375; the 19 `MakeWindingActionOrgLocal` NullRefs and all MotionData NullRefs
-  are gone. Remaining NullRefs: only the 2 known RenderTexture ones (`RainRenderEffect.Start`,
-  `IlluminationCameraController.Start`, VS-2 render carry-over).
+**Exact next action:** the st01 scene now RUNS headless with the real managers, physics and animation data:
+play mode 30 frames = 4 exceptions (was 475 at the start of 2026-11-16), the boy stands on the ground playing
+`boy_01_idl_00_lp`, 19/129 Animation components are playing, x64 player builds and behaves the same
+(`G:/Decomp/Rain/build/st01.exe`, 5 exceptions incl. one at quit). **Next = a live look by the user** (run the exe:
+arrows = left stick, home/end/delete/page down = right stick, w/s/d/c = triangle/cross/square/circle, original dev
+keyboard mapping) to see whether walking / camera follow work, then RPCS3 side-by-side. Not verified by anything
+headless: input-driven movement (Unity input cannot be injected in batchmode), camera pose (PathCamera sits at
+(13.2, 5.7, 169.4) looking steeply down at spawn; the one golden gameplay pose nearby is at height 1.1 -- may be a
+different moment or a real PathCamera problem), and whether the boy is visible (his SkinnedMeshRenderer exists
+now; in this game he only shows in rain, rain/wet effects are still the VS-2 carry-over).
 
-Not done / open (next triage round, all headless, no user needed unless noted):
-- **Nothing is actually playing yet**: at frame 30 every `CharacterActionPlayer` still has no current state
-  (`m_CurrentAnimationState` null, `Animation.isPlaying` false), player position unchanged. The data side is proven;
-  what's missing is the game loop driving it. Start by finding why `CharacterPlayer` never requests a play (suspects:
-  `m_IsUpdate` gating, and the mainData DontDestroy managers that are not in the import at all: `GameInput`,
-  `SceneManager`, `GlobalParam`, `GameParam`, `FadeManager`; `RainPlayTest` also reports `GameObject.Find("GameManager")`
-  = false). Same `--resident` mechanism can pull mainData roots, but mainData also holds the whole title/menu UI, so
-  that needs a filter (decide which roots).
-- Remaining 373 NotImplementedException/10 frames are all deferred-type stubs called from critical-path code:
-  `CharacterCtrlIdleAI.ControlCalc` x216 (NPC idle AI: promote or leave NPCs frozen = scope call),
-  `Gimmick_Collapse.CheckCollapseCollider` x53, `EffectManager.DeleteEffect` x38 / `RemoveEffect` x19,
-  `CutSceneManager.IsPlaying` x28 (real body is a 3-line static; the fixup regex only handles `static T GetInstance()`,
-  extend it), `AIEvent.Release` x12, singles: `SoundParam.UpdateAllCategoryVolume`, `DynamicObject.SetTotal`,
-  `DynamicObject.RestoreParam.Release`, `AISensor.Release`, `AsHash.Convert` (ScriptPositionManager.Start),
-  `PostEffectsBase.Main` x2.
-- 1 AttachScripts error: `PushBodyParameter.m_VibrationParam` (`VibrationController.VibrationParam` skeleton stub has
-  no parameterless ctor; VibrationController is deferred).
-- **SkinnedMeshRenderer (137) has no reader** (26 skipped in st01): bones animate but characters have no visible skinned
-  mesh, so motion cannot be SEEN yet. New native-reader RE (bones/bindposes are in Mesh, already read) -- ask first.
-- Unverified: clip `wrapMode` int is passed straight to Unity 2017's `WrapMode` (0/2/8 = Default/Loop/ClampForever,
-  same values in 3.5); curve pre/post infinity ignored (always 2/2 in this game); float curves on classID 4
-  (`m_LocalEulerAnglesHint`, 546 project-wide, 0 in st01) are dropped as editor hints.
-- Later, needs the user: live RPCS3/Unity side-by-side of the "boy walks, camera follows" loop.
-- Nothing committed this session (tracked changes: `tools/rain_export.py`, `tools/unity35_classes.py`,
-  `tools/unity/RainImport.cs`, `tools/m6_skeleton_fixups.py`, new `tools/unity_log_tally.py`, evidence E106).
+One-command loop: `bash tools/m6_cycle.sh [frames] [noimport]` (export -> sync scripts -> reimport -> playtest with
+animation probe + in-play screenshot `work/m6_play.png` -> exception tally). After changing which recon files are
+compiled or any fixup: `tools/.venv/Scripts/python -I tools/m6_skeleton_fixups.py`.
 
-History (2026-10-27, details in git log of this file): fixed the `CharacterTaskBase.LateUpdate` /
-`LookControllerBase.UpdateSegment` NullRefs and the missing Animation/CharacterController components (promoted
-CharacterAI family, CharacterActionPlayer/ActionData, GirlParameter; concrete-class execution order; Component-typed
-PPtr -> owner GameObject in the exporter; CharacterController 143 + Animation 111 readers, E105). 318 recon files
-compile; 0 compile errors, AttachScripts errors=1 (above).
+Built 2026-11-16 (all verified by the loop above; readers byte-exact project-wide, E106/E107):
+- AnimationClip pipeline (E106): 2,008/2,008 clips exact; 403 st01 clips -> legacy `.anim` (78,494 curves), float
+  curves bound to script fields; sampling at a key time reproduces the key on every bone path.
+- TextAsset (49) + ResourceManager (147): script TextAsset fields and the `Resources.Load` tree (48 text assets).
+- Resident scenes: `--resident=level0 --resident=mainData`, only roots carrying `DontDestroyObject` (mainData's
+  `TitleSequence`/`TitleCamera` is dropped: on PS3 it is destroyed before a stage runs). The `_UI_Root` tree is
+  objects only (UI scripts = deferred or never-reconstructed NGUI).
+- Project settings from the game's own managers (`tools/gen_projectsettings.py`): InputManager (13, 60 axes incl.
+  the devs' keyboard alternates), TagManager (78: 18 tags, layer names; GameObjects now get their tag), PhysicsManager
+  (55: gravity, symmetric layer collision matrix, raycastsHitTriggers), TimeManager (5: 0.032 / 0.064). Unity
+  defaults saved in `work/projectsettings_unity_default/`.
+- Colliders Box/Sphere/Capsule/Mesh (65/135/136/64), Rigidbody (54), SkinnedMeshRenderer (137) + skin weights and
+  bind poses in the mesh bin: 912 colliders, 345 rigidbodies, 26 skinned renderers, 0 missing bones.
+- **Importer bug fixed (present since 2026-10-27):** `JsonUtility` instantiates absent `[Serializable]` class fields,
+  so `o.characterController != null` / `o.animation != null` were always true and EVERY GameObject (6,663) got a
+  CharacterController and an Animation. Optional component blocks now carry an explicit `present` flag.
+- Platform shims (not reconstructed code, documented in place): `tools/native/RainPS3Utility.rs` -> Windows
+  `RainPS3Utility.dll` (GetSystemLanguage = 1 English-US, override env `RAIN_PS3_LANG`; video gamma get/set),
+  `PS3SystemUtility.GetEnterButtonAssignment` = 1 (cross, US release), `PS3Info.memFreeSize` = 256 MB.
+- Promoted to the compiled set (now 187 real files): `EffMotionEvent`/`SEMotionEvent`/`ActionMotionEvent` (new recon
+  files, real ctors from a targeted Ghidra run), `AsHash`, `CharacterCtrlIdleAI`, `SaveData`, `DynamicObject`,
+  `AISensor`, `TargetManager`, `TargetInfo`, `SoundEffectManager`. Single methods grafted verbatim from their recon
+  file into the skeleton (`GRAFTS` in `m6_skeleton_fixups.py`: `CutSceneManager.IsPlaying`, `EffectManager.
+  DeleteEffect/RemoveEffect/ChangeCameraCallback`, `AIEvent.Release`, `AIEventPadTrigger.Release`,
+  `Gimmick_Collapse.CheckCollapseCollider`, `SoundParam.UpdateAllCategoryVolume`, `SoundPackManager.ReleaseAll`,
+  `MenuManager.uiCamera`) + GetInstance fixups for `GimmickManager`/`TutorialTextManager`.
+- Execution order: `CharacterActionPlayer` -75 (before `HeadLookController` -50).
+
+Open / known gaps:
+- 4 remaining exceptions: `RainRenderEffect.Start` + `IlluminationCameraController.Start` NullRef (cameras need a
+  real RenderTexture; importer only keeps `hasTargetTexture`), `PostEffectsBase.Main` x2 (Standard Assets image
+  effect base, stub). Player quit: `SceneManager.ReleaseScene` stub.
+- 1 AttachScripts error: `PushBodyParameter.m_VibrationParam` (`VibrationController.VibrationParam` stub has no
+  parameterless ctor; VibrationController deferred).
+- Approximations to revisit: 5 concave trigger MeshColliders made convex (PhysX 3 has no concave triggers);
+  PhysicMaterial refs ignored (131 colliders project-wide have one); PhysX 2-only settings (sleep velocities,
+  min penetration) not mapped; SkinnedMeshRenderers inside MapInstantiation copies are not counted in the
+  LightMapAdjuster renderer order; clip `wrapMode` int passed straight through; Transform euler-hint float curves
+  dropped.
+- Still skipped native components in st01: ParticleSystem 198/199 (117), legacy particles 15/12/26 (45 each),
+  144 (148, unidentified), 138/59 (2 each), and 540 MonoBehaviours of classes outside `SCRIPT_CLASSES`.
+- No commit pushed; everything is local commits on `main`.
 
 
 **M6 dependency map** (local only, `work/m6_dependency_map.md`): of the 311 reconstructed types, 152 are critical-path for the walk/camera/region/rain vertical slice (player movement+anim, core game/input/scene loop, PathCamera family, PathGraph/nav, Region*/Trigger*, Rain*/CreateRainDrop); 159 are deferred (AI/enemy behaviour, audio, UI/save/menu -- already done separately, cutscenes, the Gimmick/AcqObject interactive-object system, misc render effects, the AsCommandNew AI-script VM).
@@ -165,7 +165,7 @@ bash tools/replay.sh                     # samples -> cases, compile recon to Ra
 ```
 # 1 export Stage 1 (st01 = level4 + 41 st01_Prefab_* registries)
 PL=$(grep "st01_Prefab_" work/maps/level_names.txt | cut -f1 | tr '\n' ' ')
-tools/.venv/Scripts/python -I tools/rain_export.py extracted/Rain/USRDIR/Media work/export/st01 level4 $PL --resident=level0
+tools/.venv/Scripts/python -I tools/rain_export.py extracted/Rain/USRDIR/Media work/export/st01 level4 $PL --resident=level0 --resident=mainData
 # 2 shaders (only after generator changes; keep the .meta files in Assets/RainShaders)
 tools/.venv/Scripts/python -I tools/rsx2unity_shader.py extracted/Rain/USRDIR/Media work/unity_shaders7
 cp work/unity_shaders7/*.shader $P/Assets/RainShaders/

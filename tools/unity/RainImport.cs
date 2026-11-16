@@ -18,20 +18,35 @@ public static class RainImport
     [Serializable] public class MatFile { public Mat[] materials; }
     [Serializable] public class Obj
     {
-        public string id; public string name; public int layer; public int tag; public bool active; public string parent;
+        public string id; public string name; public int layer; public int tag; public string tagName; public bool active; public string parent;
         public float[] pos; public float[] rot; public float[] scale; public string mesh; public string[] materials;
         public int lightmapIndex; public float[] lightmapST; public bool rendererEnabled = true;
         public bool useLightProbes; public string probeAnchor;
         public Cam camera; public Merge rainMerge; public Common rainCommon;
-        public CharCtrl characterController; public Anim animation;
+        public CharCtrl characterController; public Anim animation; public ColData[] colliders; public Body rigidbody; public Skin skin;
+    }
+    [Serializable] public class Skin
+    {
+        public bool present, enabled, updateWhenOffscreen; public string mesh; public string[] materials; public string[] bones; public string rootBone;
+        public int quality; public float[] aabb;
+    }
+    [Serializable] public class ColData
+    {
+        public string kind; public bool isTrigger, enabled, convex; public float[] size, center; public float radius, height; public int direction; public string mesh;
+    }
+    [Serializable] public class Body
+    {
+        public float mass, drag, angularDrag; public bool useGravity, isKinematic; public int interpolate, constraints, collisionDetection; public bool present;
     }
     [Serializable] public class CharCtrl
     {
-        public float height, radius, slopeLimit, stepOffset, skinWidth, minMoveDistance; public float[] center;
+        // JsonUtility instantiates every [Serializable] class field even when the JSON has no such key, so "!= null" is
+        // always true: each optional component block carries an explicit `present` flag written by rain_export.py.
+        public bool present; public float height, radius, slopeLimit, stepOffset, skinWidth, minMoveDistance; public float[] center;
     }
     [Serializable] public class Anim
     {
-        public bool enabled, playAutomatically; public int wrapMode; public string defaultClip; public string[] clips;
+        public bool present, enabled, playAutomatically; public int wrapMode; public string defaultClip; public string[] clips;
     }
     [Serializable] public class Cam
     {
@@ -182,11 +197,13 @@ public static class RainImport
         var lmR = new List<Renderer>(); var lmI = new List<int>(); var lmST = new List<Vector4>();
         int lmCount = sf.lightmaps == null ? 0 : sf.lightmaps.Length;
         foreach (var o in sf.objects) gos[o.id] = new GameObject(o.name);
-        int renderers = 0;
+        int renderers = 0, tagErr = 0, colliders = 0, bodies = 0, concaveTriggers = 0, skinned = 0, skinBonesMissing = 0;
         foreach (var o in sf.objects)
         {
             var go = gos[o.id];
             go.layer = Mathf.Clamp(o.layer, 0, 31);
+            if (!string.IsNullOrEmpty(o.tagName) && o.tagName != "Untagged")
+                try { go.tag = o.tagName; } catch (UnityException) { tagErr++; }   // tag missing from ProjectSettings/TagManager.asset (run tools/gen_projectsettings.py)
             if (o.parent != null && gos.ContainsKey(o.parent)) go.transform.SetParent(gos[o.parent].transform, false);
             if (o.pos != null && o.pos.Length == 3)
             {
@@ -210,15 +227,56 @@ public static class RainImport
         foreach (var o in sf.objects)
         {
             var cc = o.characterController;
-            if (cc != null)
+            if (cc != null && cc.present)
             {
                 var ctrl = gos[o.id].AddComponent<CharacterController>();
                 ctrl.height = cc.height; ctrl.radius = cc.radius; ctrl.slopeLimit = cc.slopeLimit; ctrl.stepOffset = cc.stepOffset;
                 ctrl.skinWidth = cc.skinWidth; ctrl.minMoveDistance = cc.minMoveDistance;
                 if (cc.center != null && cc.center.Length == 3) ctrl.center = new Vector3(cc.center[0], cc.center[1], cc.center[2]);
             }
+            if (o.colliders != null) foreach (var k in o.colliders)
+            {
+                Collider col = null; var g = gos[o.id];
+                Vector3 ctr = k.center != null && k.center.Length == 3 ? new Vector3(k.center[0], k.center[1], k.center[2]) : Vector3.zero;
+                if (k.kind == "box") { var b = g.AddComponent<BoxCollider>(); b.size = new Vector3(k.size[0], k.size[1], k.size[2]); b.center = ctr; col = b; }
+                else if (k.kind == "sphere") { var s = g.AddComponent<SphereCollider>(); s.radius = k.radius; s.center = ctr; col = s; }
+                else if (k.kind == "capsule") { var cp = g.AddComponent<CapsuleCollider>(); cp.radius = k.radius; cp.height = k.height; cp.direction = k.direction; cp.center = ctr; col = cp; }
+                else if (k.kind == "mesh")
+                {
+                    var mc = g.AddComponent<MeshCollider>(); Mesh cm;
+                    if (k.mesh != null && meshes.TryGetValue(k.mesh, out cm)) mc.sharedMesh = cm;
+                    // PhysX 3 (Unity 5+) has no concave trigger meshes (PhysX 2 / Unity 3.5 did): approximate with the convex hull
+                    if (k.isTrigger && !k.convex) { mc.convex = true; concaveTriggers++; } else mc.convex = k.convex;
+                    col = mc;
+                }
+                if (col == null) continue;
+                col.isTrigger = k.isTrigger; col.enabled = k.enabled; colliders++;
+            }
+            var sk = o.skin;
+            if (sk != null && sk.present && sk.mesh != null && meshes.ContainsKey(sk.mesh))
+            {
+                var smr = gos[o.id].AddComponent<SkinnedMeshRenderer>(); skinned++;
+                smr.sharedMesh = meshes[sk.mesh];
+                var ml = new List<Material>();
+                if (sk.materials != null) foreach (var id in sk.materials) ml.Add(id != null && mats.ContainsKey(id) ? mats[id] : null);
+                smr.sharedMaterials = ml.ToArray();
+                var bl = new Transform[sk.bones == null ? 0 : sk.bones.Length];
+                for (int i = 0; i < bl.Length; i++) { GameObject bg; if (sk.bones[i] != null && gos.TryGetValue(sk.bones[i], out bg)) bl[i] = bg.transform; else skinBonesMissing++; }
+                smr.bones = bl;
+                GameObject rg; if (sk.rootBone != null && gos.TryGetValue(sk.rootBone, out rg)) smr.rootBone = rg.transform;
+                smr.quality = (SkinQuality)sk.quality; smr.updateWhenOffscreen = sk.updateWhenOffscreen; smr.enabled = sk.enabled;
+                if (sk.aabb != null && sk.aabb.Length == 6) smr.localBounds = new Bounds(new Vector3(sk.aabb[0], sk.aabb[1], sk.aabb[2]), 2f * new Vector3(sk.aabb[3], sk.aabb[4], sk.aabb[5]));
+            }
+            var rb = o.rigidbody;
+            if (rb != null && rb.present)
+            {
+                var body = gos[o.id].AddComponent<Rigidbody>();
+                body.mass = rb.mass; body.drag = rb.drag; body.angularDrag = rb.angularDrag; body.useGravity = rb.useGravity; body.isKinematic = rb.isKinematic;
+                body.interpolation = (RigidbodyInterpolation)rb.interpolate; body.constraints = (RigidbodyConstraints)rb.constraints;
+                body.collisionDetectionMode = (CollisionDetectionMode)rb.collisionDetection; bodies++;
+            }
             var an = o.animation;
-            if (an != null)
+            if (an != null && an.present)
             {
                 var anim = gos[o.id].AddComponent<Animation>();
                 anim.enabled = an.enabled; anim.playAutomatically = an.playAutomatically; anim.wrapMode = (WrapMode)an.wrapMode;
@@ -299,6 +357,7 @@ public static class RainImport
 
         string scenePath = root + "/" + sceneName + ".unity";
         EditorSceneManager.SaveScene(scene, scenePath);
+        Debug.Log("RAIN IMPORT: colliders=" + colliders + " (concave trigger meshes made convex: " + concaveTriggers + ") rigidbodies=" + bodies + " tagErrors=" + tagErr + " skinned=" + skinned + " (missing bones " + skinBonesMissing + ")");
         Debug.Log(string.Format("RAIN IMPORT: gameobjects={0} renderers={1} meshes={2} materials={3} (converted shader {4}) textures={5} lightmaps={6} lightmapped={7} scene={8}",
             gos.Count, renderers, meshes.Count, mats.Count, bound, Directory.GetFiles(root + "/Textures", "*.dds").Length, lmCount, lmR.Count, scenePath));
     }
@@ -375,6 +434,28 @@ public static class RainImport
                 int c = br.ReadInt32(); var idx = new int[c];
                 for (int i = 0; i < c; i++) idx[i] = br.ReadInt32();
                 mesh.SetTriangles(idx, s);
+            }
+            if (br.BaseStream.Position < br.BaseStream.Length)   // skinning trailer (rain_export.py write_mesh)
+            {
+                int sn = br.ReadInt32();
+                if (sn == n)
+                {
+                    var bw = new BoneWeight[sn];
+                    for (int i = 0; i < sn; i++)
+                    {
+                        bw[i].weight0 = br.ReadSingle(); bw[i].weight1 = br.ReadSingle(); bw[i].weight2 = br.ReadSingle(); bw[i].weight3 = br.ReadSingle();
+                        bw[i].boneIndex0 = br.ReadInt32(); bw[i].boneIndex1 = br.ReadInt32(); bw[i].boneIndex2 = br.ReadInt32(); bw[i].boneIndex3 = br.ReadInt32();
+                    }
+                    mesh.boneWeights = bw;
+                }
+                else br.BaseStream.Seek(32L * sn, SeekOrigin.Current);
+                int bn = br.ReadInt32();
+                if (bn > 0)
+                {
+                    var bp = new Matrix4x4[bn];
+                    for (int i = 0; i < bn; i++) for (int rr = 0; rr < 4; rr++) for (int cc = 0; cc < 4; cc++) bp[i][rr, cc] = br.ReadSingle();
+                    mesh.bindposes = bp;
+                }
             }
             mesh.RecalculateBounds();
             return mesh;

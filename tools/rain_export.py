@@ -99,6 +99,12 @@ def write_mesh(path, d, b):
         first = sm["firstByte"] // 2; seg = list(idx_all[first: first + sm["indexCount"]])
         tris = strip_to_list(seg) if sm["topology"] == 2 else seg
         out += struct.pack(f"<I{len(tris)}I", len(tris), *tris)
+    # skinning trailer (always present, counts may be 0): u32 n, per vertex 4 f32 weights + 4 i32 bone indices;
+    # u32 bindPoseCount, 16 f32 each in serialized order e00 e01 e02 e03 e10 ... (row-major)
+    out += struct.pack("<I", len(d["skin"]))
+    for w, bi in d["skin"]: out += struct.pack("<4f4i", *w, *bi)
+    out += struct.pack("<I", len(d["bindPose"]))
+    for m in d["bindPose"]: out += struct.pack("<16f", *m)
     with open(path, "wb") as f: f.write(out)
 
 def write_clip(path, d):
@@ -141,6 +147,11 @@ SCRIPT_CLASSES = {
     "TriggerCollisionArea", "TriggerCondition_AlwaysTrue", "TriggerCondition_CharaNameCtrl",
     "TriggerCondition_CharaTypeCtrl", "TriggerCondition_EventFlag", "TriggerCondition_ExtraState",
     "TriggerEventFlagON", "TriggerProcessPlayBGM", "TwoParameter", "UIKillCamera", "WetNewspaper", "myBlurEffect",
+    # mainData `_Manager_Ignition` (DontDestroyOnLoad core managers; exported with --resident=mainData)
+    "FadeManager", "GameDefine", "GameInput", "GameParam", "GlobalParam", "SceneManager", "SceneTable",
+    # promoted 2026-11-16: pushable physics objects (the player's PushBody queries them on every controller hit) and
+    # the target registry the player's own AISensor is built from
+    "DynamicObject", "TargetManager",
 }
 
 class Exporter:
@@ -187,6 +198,23 @@ class Exporter:
             cid, b = self.F.get(ref); d = c.mesh(c.R(b))
             write_mesh(os.path.join(self.out, "meshes", rid(ref) + ".bin"), d, b); self.meshes.add(ref)
         return rid(ref)
+    def script_names(self, goref):
+        """Class names of the MonoBehaviours attached to a GameObject."""
+        out = []
+        for ccid, pp in c.gameobject(c.R(self.F.get(goref)[1]))["components"]:
+            cref = self.F.resolve(goref[0], pp)
+            if ccid != 114 or cref is None: continue
+            sref = self.F.resolve(cref[0], mbd.header(self.F.get(cref)[1])[2])
+            if sref and self.F.get(sref)[0] == 115: out.append(c.R(self.F.get(sref)[1]).string())
+        return out
+    BUILTIN_TAGS = {0: "Untagged", 1: "Respawn", 2: "Finish", 3: "EditorOnly", 5: "MainCamera", 6: "Player", 7: "GameController"}
+    def tag_name(self, tag):
+        """GameObject.m_Tag -> tag string (built-in ids, or 20000 + index into the game's TagManager, mainData 78)."""
+        if not hasattr(self, "_tags"):
+            self._tags = next(c.tagmanager(c.R(b))["tags"] for pid, (cid, b) in self.F.load("mainData")[0].items() if cid == 78)
+        if tag in self.BUILTIN_TAGS: return self.BUILTIN_TAGS[tag]
+        if 20000 <= tag < 20000 + len(self._tags): return self._tags[tag - 20000]
+        self.report[f"unknown tag {tag}"] += 1; return "Untagged"
     def clip(self, ref):
         """Export an AnimationClip (74, reader byte-exact on 2,008/2,008, E106) to clips/<id>.bin (see write_clip)."""
         if ref is None: return None
@@ -231,7 +259,7 @@ class Exporter:
         if ref in self.done: return
         self.done.add(ref)
         cid, b = self.F.get(ref); go = c.gameobject(c.R(b))
-        o = {"id": rid(ref), "name": go["name"], "layer": go["layer"], "tag": go["tag"], "active": go["active"], "parent": parent,
+        o = {"id": rid(ref), "name": go["name"], "layer": go["layer"], "tag": go["tag"], "tagName": self.tag_name(go["tag"]), "active": go["active"], "parent": parent,
              "mesh": None, "materials": [], "lightmapIndex": 255, "lightmapST": [1, 1, 0, 0]}
         children = []
         for ccid, pp in go["components"]:
@@ -259,12 +287,35 @@ class Exporter:
                 o["camera"]["hasTargetTexture"] = tt is not None
             elif ccid == 143:
                 d = c.charactercontroller(c.R(cb))
-                o["characterController"] = {"height": d["height"], "radius": d["radius"], "slopeLimit": d["slopeLimit"],
+                o["characterController"] = {"present": True, "height": d["height"], "radius": d["radius"], "slopeLimit": d["slopeLimit"],
                                              "stepOffset": d["stepOffset"], "skinWidth": d["skinWidth"],
                                              "minMoveDistance": d["minMoveDistance"], "center": list(d["center"])}
+            elif ccid == 137:   # SkinnedMeshRenderer (E107): kept apart from "materials" (= MeshRenderer, lightmap bookkeeping)
+                d = c.skinnedmeshrenderer(c.R(cb))
+                def tgo(pp):   # PPtr<Transform> -> owning GameObject id
+                    tref = self.F.resolve(cref[0], pp)
+                    if not tref: return None
+                    g = self.F.resolve(tref[0], c.transform(c.R(self.F.get(tref)[1]))["go"]); return rid(g) if g else None
+                o["skin"] = {"present": True, "enabled": d["enabled"], "mesh": self.mesh(self.F.resolve(cref[0], d["mesh"])),
+                             "materials": [self.material(self.F.resolve(cref[0], m)) for m in d["materials"]],
+                             "bones": [tgo(b_) for b_ in d["bones"]], "rootBone": tgo(d["rootBone"]), "quality": d["quality"],
+                             "updateWhenOffscreen": d["updateWhenOffscreen"], "aabb": list(d["aabb"])}
+            elif ccid in (65, 135, 136, 64):   # colliders (E107); PhysicMaterial refs are not exported
+                d = {65: c.boxcollider, 135: c.spherecollider, 136: c.capsulecollider, 64: c.meshcollider}[ccid](c.R(cb))
+                col = {"kind": {65: "box", 135: "sphere", 136: "capsule", 64: "mesh"}[ccid], "isTrigger": d["isTrigger"], "enabled": d["enabled"]}
+                for k in ("size", "center"):
+                    if k in d: col[k] = list(d[k])
+                for k in ("radius", "height", "direction", "convex"):
+                    if k in d: col[k] = d[k]
+                if ccid == 64: col["mesh"] = self.mesh(self.F.resolve(cref[0], d["mesh"]))
+                if d["material"][1]: self.report["collider physic material ignored"] += 1
+                o.setdefault("colliders", []).append(col)
+            elif ccid == 54:
+                d = c.rigidbody(c.R(cb))
+                o["rigidbody"] = {"present": True, **{k: d[k] for k in ("mass", "drag", "angularDrag", "useGravity", "isKinematic", "interpolate", "constraints", "collisionDetection")}}
             elif ccid == 111:
                 d = c.animation(c.R(cb))
-                o["animation"] = {"enabled": d["enabled"], "wrapMode": d["wrapMode"], "playAutomatically": d["playAutomatically"],
+                o["animation"] = {"present": True, "enabled": d["enabled"], "wrapMode": d["wrapMode"], "playAutomatically": d["playAutomatically"],
                                   "defaultClip": self.clip(self.F.resolve(cref[0], d["defaultClip"])),
                                   "clips": [x for x in (self.clip(self.F.resolve(cref[0], k)) for k in d["clips"]) if x]}
             elif ccid == 114 and (pe := self.post_effect(cref, cb)) is not None:
@@ -391,6 +442,9 @@ class Exporter:
                 pre = f"mi{n}:"; n += 1; nodes = []
                 for o in cache[ref]:
                     c2 = json.loads(json.dumps(o)); c2["id"] = pre + o["id"]; c2["parent"] = pre + o["parent"] if o["parent"] else None
+                    if "skin" in c2:   # bone refs point inside the same copied hierarchy
+                        c2["skin"]["bones"] = [b_ and pre + b_ for b_ in c2["skin"]["bones"]]
+                        c2["skin"]["rootBone"] = c2["skin"]["rootBone"] and pre + c2["skin"]["rootBone"]
                     c2["active"] = True; nodes.append(c2)   # streamed in = activated with its whole hierarchy (E86)
                 for i, o in enumerate(nodes):
                     for key, vals, idxs in (("pos", kind["_pos"], kind["_posIdx"]), ("rot", kind["_rot"], kind["_rotIdx"]), ("scale", kind["_scale"], kind["_scaleIdx"])):
@@ -427,8 +481,13 @@ class Exporter:
         world = self.world = mbd.World(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "managed_il"))
         # resident scenes (level0 = ResidentScenePS3: DontDestroyOnLoad manager objects, e.g. MotionDataManager's motion
         # name table) are already loaded when a stage starts on PS3; export their roots into the same scene
-        for lv in (level, *resident_levels):
-            for r in self.scene_roots(lv): self.roots.append(rid(r)); self.gameobject(r, None)
+        # -- only the roots carrying a DontDestroyObject script: the rest of a resident level (e.g. mainData's
+        # TitleSequence + TitleCamera) is destroyed by the scene change before a stage runs.
+        for r in self.scene_roots(level): self.roots.append(rid(r)); self.gameobject(r, None)
+        for lv in resident_levels:
+            for r in self.scene_roots(lv):
+                if "DontDestroyObject" in self.script_names(r): self.roots.append(rid(r)); self.gameobject(r, None)
+                else: self.report["resident root skipped (not DontDestroy)"] += 1
         self.map_instances(level, world, self.prefab_table(prefab_levels, world))   # prefab templates themselves never render
         lm, rs = self.settings(level); self.resources()
         json.dump({"objects": self.objects, "roots": self.roots, "lightmaps": lm["lightmaps"], "lightmapsMode": lm["mode"], "lightProbes": lm["lightProbes"], "render": rs},

@@ -51,6 +51,30 @@ public static class RainPlayTest
         var cams = UnityEngine.Object.FindObjectsOfType<Camera>();
         string camInfo = "count=" + cams.Length;
         foreach (var c in cams) if (c.enabled && c.gameObject.activeInHierarchy) camInfo += " active=" + c.gameObject.name + "@" + c.transform.position.ToString("F2");
+        // animation probe: which characters have an Animation that is actually playing, and what
+        int animTotal = 0, animPlaying = 0; string playerAnim = "none";
+        foreach (var an in UnityEngine.Object.FindObjectsOfType<Animation>())
+        {
+            animTotal++; if (!an.isPlaying) continue;
+            animPlaying++;
+            if (an.gameObject != playerGo) continue;
+            playerAnim = "";
+            foreach (AnimationState st in an) if (an.IsPlaying(st.name)) playerAnim += st.name + "(w=" + st.weight.ToString("F2") + ",t=" + st.time.ToString("F2") + ") ";
+        }
+        Debug.Log("RAIN PLAYTEST: animations playing=" + animPlaying + "/" + animTotal + " player=" + playerAnim);
+        // optional in-play screenshot of every enabled on-screen camera, composited in depth order (-rainShot <png>)
+        string shot = Arg("-rainShot");
+        if (shot != null)
+        {
+            var rt = new RenderTexture(1280, 720, 24); var list = new System.Collections.Generic.List<Camera>();
+            foreach (var c in UnityEngine.Object.FindObjectsOfType<Camera>()) if (c.enabled && c.gameObject.activeInHierarchy && c.targetTexture == null) list.Add(c);
+            list.Sort((a, b) => a.depth.CompareTo(b.depth));
+            foreach (var c in list) { c.targetTexture = rt; c.Render(); c.targetTexture = null; }
+            RenderTexture.active = rt; var tex = new Texture2D(1280, 720, TextureFormat.RGB24, false);
+            tex.ReadPixels(new Rect(0, 0, 1280, 720), 0, 0); tex.Apply(); RenderTexture.active = null;
+            System.IO.File.WriteAllBytes(shot, tex.EncodeToPNG());
+            Debug.Log("RAIN PLAYTEST: shot " + shot + " cameras=" + list.Count);
+        }
         Debug.Log("RAIN PLAYTEST: frame=" + frame + " playerPos=" + pos + " cameras(" + camInfo + ")");
         EditorApplication.isPlaying = false;
         EditorApplication.delayCall += () => { Debug.Log("RAIN PLAYTEST: done, exiting"); EditorApplication.Exit(0); };

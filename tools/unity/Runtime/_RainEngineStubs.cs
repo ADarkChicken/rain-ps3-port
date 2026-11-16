@@ -443,7 +443,7 @@ namespace UnityEngine
 {
     public sealed partial class PS3Info
     {
-        public static int memFreeSize { get { throw new global::System.NotImplementedException(); } }
+        public static int memFreeSize { get { return 0x10000000; } }
         public PS3Info() { }
         public static void DBOutput(int nChannel, string szText) { }
         public static void MemoryResidenceVertex(bool bEnable) { }
@@ -475,7 +475,7 @@ namespace UnityEngine
         public static bool pal { get { throw new global::System.NotImplementedException(); } }
         public PS3SystemUtility() { }
         public static void TriggerOnSystemNotification(uint subSystem, uint id, uint notification, uint status) { throw new global::System.NotImplementedException(); }
-        public static int GetEnterButtonAssignment() { throw new global::System.NotImplementedException(); }
+        public static int GetEnterButtonAssignment() { return 1; }
         public delegate void SystemNotificationDelegate(uint subsystem, uint index, uint notification, uint status);
     }
     public sealed partial class SGXBody : global::UnityEngine.Object
@@ -489,6 +489,19 @@ namespace UnityEngine
     public sealed partial class SGXHeader : global::UnityEngine.Object
     {
         public SGXHeader() { }
+    }
+    public sealed partial class SGXSettings
+    {
+        public SGXSettings() { }
+        public static void SetEffectFile(string name) { throw new global::System.NotImplementedException(); }
+        public static bool SetBusSetup(string name) { throw new global::System.NotImplementedException(); }
+        public static void SetCategoryVolume(int cid, float vol) { throw new global::System.NotImplementedException(); }
+        public static void SetCategoryPause(int cid, bool pause) { throw new global::System.NotImplementedException(); }
+        public static void SetCategoryNearDistance(int cid, float dis) { throw new global::System.NotImplementedException(); }
+        public static void SetCategoryNearLv(int cid, float vol) { throw new global::System.NotImplementedException(); }
+        public static void SetCategoryFarDistance(int cid, float dis) { throw new global::System.NotImplementedException(); }
+        public static void SetCategoryFarLv(int cid, float vol) { throw new global::System.NotImplementedException(); }
+        public static void SetCategoryExp(int cid, float Exp) { throw new global::System.NotImplementedException(); }
     }
     public sealed partial class SGXSource : global::UnityEngine.Behaviour
     {
