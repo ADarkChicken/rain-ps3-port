@@ -4,7 +4,7 @@ Last updated: 2026-11-16 (M5 COMPLETE. M6: st01 runs headless with real managers
 animation clips -- 4 exceptions/30 frames, boy idles on the ground, x64 player builds; needs a live look next).
 
 ## Where we are
-**Phase 5: M0–M4 COMPLETE; M5 (reconstruct the Stage-1 slice closure) APPROVED 2026-10-17, in progress.**
+**Phase 5: M0–M5 COMPLETE; M6 (VS-2 "boy walks in the rain") in progress: runs headless, awaiting a live check.**
 | Item | Result | Evidence |
 |---|---|---|
 | M0 Host | **Unity 2017.4.40f1** (D9), x64 D3D11 player builds/runs; skeleton + PS3 shims compile; vtable layout resolved | E63–E73 |
@@ -13,6 +13,8 @@ animation clips -- 4 exceptions/30 frames, boy idles on the ground, x64 player b
 | M3 VS-1 | **Complete.** x64 player shows Stage 1 (E93); golden structure match edge NCC 0.70/0.79/0.67 ≥ 0.65 (E92). Built: keyword bridge, lightmaps + light probes, MapInstantiation map build (1,482 copies), RainCommon/RainMerge post effects reconstructed from code, shader fixes (scalar uniforms, PS3 depth decode, texture row order). Carried to VS-2: rain systems (wet reflections, rain/mist), sun shafts, DOF | E83–E93 |
 | M4 Toolchain | **Complete.** T2 field layout/chains, T3 vtable resolver, T4 0 unresolved generic names, T5 lift packets + compile harness; benchmark 44/53 A (83 %), all compile | E94–E96, BENCHMARK_M4.md |
 | M5 Slice logic | **In progress.** Closure (direct calls, level4 + 41 st01 prefabs): 146 script classes → 212 top-level types / 4,339 methods (`work/maps/st01_closure*.csv`). All 238 types decompiled with switch recovery + lifted (`work/decomp_st01`, `work/lift_st01`, local). Layout rule corrected (E97). Queue finished 2026-10-19: 209/212 types full + 3 partial by design, 3878/4339 methods, all compile; replay PASS 1137/FAIL 227 (all environment). Gap: types reached only via fields/inlined accessors are outside the closure (E101) | E97–E101 |
+| M5 final | **Complete 2026-10-25.** Queue 311/311 types, 5,819 methods; now 319 recon files (3 M6 data classes added 2026-11-16), all compile | PROJECT_STATUS history |
+| M6 VS-2 | **In progress.** st01 imports with gameplay scripts (187 real files compiled, rest skeleton), resident managers (level0 + mainData), game-derived project settings, colliders/rigidbodies/skinned meshes, 403 animation clips; play mode 30 frames = 4 exceptions, boy idles on the floor, x64 player builds. Not yet checked live: walking, camera follow, region events, rain visuals | E105–E107 |
 
 **Exact next action:** the st01 scene now RUNS headless with the real managers, physics and animation data:
 play mode 30 frames = 4 exceptions (was 475 at the start of 2026-11-16), the boy stands on the ground playing
@@ -70,7 +72,6 @@ Open / known gaps:
   dropped.
 - Still skipped native components in st01: ParticleSystem 198/199 (117), legacy particles 15/12/26 (45 each),
   144 (148, unidentified), 138/59 (2 each), and 540 MonoBehaviours of classes outside `SCRIPT_CLASSES`.
-- No commit pushed; everything is local commits on `main`.
 
 
 **M6 dependency map** (local only, `work/m6_dependency_map.md`): of the 311 reconstructed types, 152 are critical-path for the walk/camera/region/rain vertical slice (player movement+anim, core game/input/scene loop, PathCamera family, PathGraph/nav, Region*/Trigger*, Rain*/CreateRainDrop); 159 are deferred (AI/enemy behaviour, audio, UI/save/menu -- already done separately, cutscenes, the Gimmick/AcqObject interactive-object system, misc render effects, the AsCommandNew AI-script VM).
@@ -161,11 +162,15 @@ bash tools/replay.sh                     # samples -> cases, compile recon to Ra
 #   tools/.venv/Scripts/python -I -u tools/probe_calls.py work/rpcs3_logs/callsN/rpcs3_snapshot.log work/rpcs3_logs/callsN --skip <merged census, hits>0>   (background)
 #   stop: touch work/rpcs3_logs/callsN/stop.req (before a chapter load); user closes RPCS3 after; add the new samples.jsonl to tools/replay.sh
 ```
-### M1–M3 pipeline (bash, from DECOMP/; U=../_tools/Unity-2017.4.40f1/Editor/Unity.exe, P=G:/Decomp/Rain/port_unity)
+### M1–M3 + M6 pipeline (bash, from DECOMP/; U=../_tools/Unity-2017.4.40f1/Editor/Unity.exe, P=G:/Decomp/Rain/port_unity)
 ```
 # 1 export Stage 1 (st01 = level4 + 41 st01_Prefab_* registries)
 PL=$(grep "st01_Prefab_" work/maps/level_names.txt | cut -f1 | tr '\n' ' ')
 tools/.venv/Scripts/python -I tools/rain_export.py extracted/Rain/USRDIR/Media work/export/st01 level4 $PL --resident=level0 --resident=mainData
+# 1b project settings from the game's own managers (once, or after ProjectSettings/ is reset; before the import)
+tools/.venv/Scripts/python -I tools/gen_projectsettings.py extracted/Rain/USRDIR/Media $P
+# 1c Windows stand-in for the PS3 native plugin (once; Rust gnu toolchain, no C compiler needed)
+rustc --crate-type cdylib -C opt-level=2 -C panic=abort -o $P/Assets/Plugins/x86_64/RainPS3Utility.dll tools/native/RainPS3Utility.rs
 # 2 shaders (only after generator changes; keep the .meta files in Assets/RainShaders)
 tools/.venv/Scripts/python -I tools/rsx2unity_shader.py extracted/Rain/USRDIR/Media work/unity_shaders7
 cp work/unity_shaders7/*.shader $P/Assets/RainShaders/
@@ -176,6 +181,10 @@ $U -batchmode -quit -projectPath $P -executeMethod RainImport.Run -rainExport <a
 $U -batchmode -quit -projectPath $P -executeMethod RainShaderDiag.Run -logFile <log>                        # expect withError=0
 $U -batchmode -quit -projectPath $P -executeMethod RainShaderBuildCheck.Run -rainOut <dir> -logFile <log>   # x64 player, all variants
 $U -batchmode -quit -projectPath $P -executeMethod RainShot.Run -rainScenePath Assets/Rain/st01/st01.unity -rainOut <dir> [-rainPoses work/rpcs3_logs/campose/poses.jsonl]
+# 4b M6 loop: steps 1 + 3(editor scripts) + import + 30-frame play test + screenshot + exception tally, in one command
+bash tools/m6_cycle.sh 30            # add `noimport` to rerun only the play test; > 3 min, run it in the background
+tools/.venv/Scripts/python -I tools/m6_skeleton_fixups.py   # after changing the compiled recon set or any fixup/graft
+$U -batchmode -quit -projectPath $P -executeMethod RainBuild.Run -rainScenePath Assets/Rain/st01/st01.unity -rainOut G:/Decomp/Rain/build/st01.exe -logFile <log>
 # 5 golden capture session (user plays; RPCS3 must use the interpreter config; slow)
 rpcs3.exe --no-gui --config work/rpcs3_cfg/config_probe.yml "<RPCS3>/dev_hdd0/game/NPUA80719/USRDIR/EBOOT.BIN"   (run in background)
 #   once the user is in game: copy the log (Python cannot open the live one), start the probe in background
