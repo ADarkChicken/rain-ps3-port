@@ -31,7 +31,7 @@ public static class RainImport
     }
     [Serializable] public class Anim
     {
-        public bool enabled, playAutomatically; public int wrapMode;
+        public bool enabled, playAutomatically; public int wrapMode; public string defaultClip; public string[] clips;
     }
     [Serializable] public class Cam
     {
@@ -92,12 +92,16 @@ public static class RainImport
         // attempt set only the abstract base names and had no effect).
         foreach (var n in new[] { "CharacterPlayer", "CharacterEnemy_Big", "CharacterEnemy_Four", "CharacterEnemy_Small", "CharacterEnemy_Two", "CharacterGirl" })
             SetExecutionOrderSafe(n, -100);
+        // CharacterActionPlayer.Start() sets m_ErrorData (the idle motion GetPlayAnimationState() falls back to while
+        // nothing has been played yet); HeadLookController.Start() -> MakeWindingActionOrgLocal dereferences that state
+        // unconditionally (same shape in the PS3 code), so the action player must start before the look controllers.
+        SetExecutionOrderSafe("CharacterActionPlayer", -75);
         foreach (var n in new[] { "LookControllerBase", "HeadLookController", "CharacterTaskBase", "RootMotionComputer" })
             SetExecutionOrderSafe(n, -50);
 
         string src = Arg("-rainExport"), sceneName = Arg("-rainScene");
         string root = "Assets/Rain/" + sceneName;
-        foreach (var d in new[] { root, root + "/Textures", root + "/Meshes", root + "/Materials" })
+        foreach (var d in new[] { root, root + "/Textures", root + "/Meshes", root + "/Materials", root + "/Clips" })
             Directory.CreateDirectory(d);
 
         // textures: copy DDS files, let Unity import them
@@ -142,6 +146,32 @@ public static class RainImport
             AssetDatabase.CreateAsset(mesh, root + "/Meshes/" + Safe(id) + ".asset");
             meshes[id] = mesh;
         }
+        // animation clips (legacy; clips/<id>.bin from rain_export.py's write_clip). Asset file name = clip name: the game
+        // looks states up by clip name and CreateAsset renames the object to its file name (names are unique in st01).
+        // text assets: script-field TextAssets (TextAssets/<id>.<ext>) + the original Resources.Load tree (Resources/...)
+        s_texts.Clear();
+        foreach (var sub in new[] { "textassets", "resources" })
+        {
+            string from = Path.Combine(src, sub), to = root + (sub == "textassets" ? "/TextAssets" : "/Resources");
+            if (!Directory.Exists(from)) continue;
+            foreach (var f in Directory.GetFiles(from, "*", SearchOption.AllDirectories))
+            {
+                string rel = f.Substring(from.Length + 1).Replace('\\', '/');
+                string dst = to + "/" + (sub == "textassets" ? Safe(rel) : rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(dst)); File.Copy(f, dst, true);
+                if (sub == "textassets") s_texts[rel] = dst;
+            }
+        }
+        AssetDatabase.Refresh();
+        s_clips.Clear(); int clipCurves = 0, clipSkipped = 0;
+        if (Directory.Exists(Path.Combine(src, "clips")))
+            foreach (var f in Directory.GetFiles(Path.Combine(src, "clips"), "*.bin"))
+            {
+                var clip = ReadClip(f, ref clipCurves, ref clipSkipped);
+                AssetDatabase.CreateAsset(clip, root + "/Clips/" + clip.name + ".anim");
+                s_clips[Path.GetFileNameWithoutExtension(f)] = clip;
+            }
+        Debug.Log("RAIN IMPORT: clips=" + s_clips.Count + " curves=" + clipCurves + " curvesSkipped=" + clipSkipped);
         AssetDatabase.SaveAssets();
 
         // scene
@@ -190,10 +220,11 @@ public static class RainImport
             var an = o.animation;
             if (an != null)
             {
-                // clip playback not wired yet (no AnimationClip asset pipeline) -- an empty, enabled component is
-                // enough to satisfy GetComponent<Animation>() and stop MissingComponentException (M6 2026-10-27).
                 var anim = gos[o.id].AddComponent<Animation>();
                 anim.enabled = an.enabled; anim.playAutomatically = an.playAutomatically; anim.wrapMode = (WrapMode)an.wrapMode;
+                AnimationClip ac;
+                if (an.clips != null) foreach (var cid in an.clips) if (s_clips.TryGetValue(cid, out ac)) anim.AddClip(ac, ac.name);
+                if (an.defaultClip != null && s_clips.TryGetValue(an.defaultClip, out ac)) anim.clip = ac;
             }
         }
         foreach (var o in sf.objects)
@@ -281,6 +312,50 @@ public static class RainImport
         return new AnimationCurve(keys);
     }
 
+    static readonly Dictionary<string, AnimationClip> s_clips = new Dictionary<string, AnimationClip>();
+    static readonly Dictionary<string, string> s_texts = new Dictionary<string, string>();   // export name -> asset path
+    static string ReadStr(BinaryReader br) { int n = (int)br.ReadUInt32(); return System.Text.Encoding.UTF8.GetString(br.ReadBytes(n)); }
+    static readonly string[] kClipProp = { "m_LocalRotation", "m_LocalPosition", "m_LocalScale" };
+    static readonly string[] kXyzw = { ".x", ".y", ".z", ".w" };
+    // clips/<id>.bin (rain_export.py write_clip): keys keep the original value + in/out slopes, nothing is resampled
+    static AnimationClip ReadClip(string path, ref int curves, ref int skipped)
+    {
+        using (var br = new BinaryReader(File.OpenRead(path)))
+        {
+            br.ReadUInt32(); br.ReadUInt32();   // 'RCLP', version
+            var clip = new AnimationClip { legacy = true, name = ReadStr(br) };
+            clip.frameRate = br.ReadSingle(); clip.wrapMode = (WrapMode)br.ReadInt32();
+            uint nc = br.ReadUInt32();
+            for (uint c = 0; c < nc; c++)
+            {
+                int kind = br.ReadByte(), n = br.ReadByte();
+                string tpath = ReadStr(br), attr = ReadStr(br); int classID = br.ReadInt32(); string script = ReadStr(br);
+                br.ReadInt32(); br.ReadInt32();   // pre/post infinity: always 2/2 (clamp) in this game = AnimationCurve default
+                int nk = (int)br.ReadUInt32();
+                var keys = new Keyframe[n][]; for (int i = 0; i < n; i++) keys[i] = new Keyframe[nk];
+                var v = new float[1 + 3 * n];
+                for (int k = 0; k < nk; k++)
+                {
+                    for (int i = 0; i < v.Length; i++) v[i] = br.ReadSingle();
+                    for (int i = 0; i < n; i++) keys[i][k] = new Keyframe(v[0], v[1 + i], v[1 + n + i], v[1 + 2 * n + i]);
+                }
+                Type t; string prop;
+                if (kind < 3) { t = typeof(Transform); prop = kClipProp[kind]; }
+                else
+                {
+                    prop = attr;
+                    if (classID == 114) t = FindType(script);
+                    else if (classID == 20) t = typeof(Camera);
+                    else if (classID == 21) t = typeof(Material);
+                    else if (classID == 54) t = typeof(Rigidbody);
+                    else t = null;   // 4 = Transform m_LocalEulerAnglesHint (editor hint, no runtime effect)
+                    if (t == null) { skipped++; continue; }
+                }
+                for (int i = 0; i < n; i++) { clip.SetCurve(tpath, t, kind < 3 ? prop + kXyzw[i] : prop, new AnimationCurve(keys[i])); curves++; }
+            }
+            return clip;
+        }
+    }
     static Mesh ReadMesh(string path)
     {
         using (var br = new BinaryReader(File.OpenRead(path)))
@@ -349,6 +424,8 @@ public static class RainImport
     static object ResolveRef(string id, Type fieldType, Dictionary<string, GameObject> gos, Dictionary<string, Material> mats)
     {
         if (id == null) return null;
+        if (fieldType == typeof(AnimationClip)) { AnimationClip ac; return s_clips.TryGetValue(id, out ac) ? ac : null; }
+        if (fieldType == typeof(TextAsset)) { string tp; return s_texts.TryGetValue(id, out tp) ? AssetDatabase.LoadAssetAtPath<TextAsset>(tp) : null; }
         GameObject go;
         if (gos.TryGetValue(id, out go))
         {

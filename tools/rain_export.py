@@ -1,12 +1,13 @@
 """Export a Rain scene (PS3 Unity 3.5) to a neutral intermediate for the Unity 2017.4 importer.
-Usage: rain_export.py <Media dir> <out dir> <levelfile> [prefab-levelfile ...]
+Usage: rain_export.py <Media dir> <out dir> <levelfile> [prefab-levelfile ...] [--resident=<levelfile> ...]
 Output (out dir):
   scene.json      {"objects":[{id,name,layer,tag,active,pos,rot,scale,parent,mesh,materials,lightmapIndex,lightmapST}], "roots":[...],
                    "lightmaps":[{far,near}] (texture ids or null), "lightmapsMode", "render":{RenderSettings fields},
                    "lightProbes":{positions[3n], coefficients[27n], tetrahedra[4m] (-1 = outer cell)} or null}
                   renderers also carry useLightProbes and probeAnchor (GO id, optional)
   materials.json  {"materials":[{id,name,shader,shaderName,textures:[{prop,tex,scale,offset}],floats:[{prop,value}],colors:[{prop,value}]}]}
-  textures/<id>.dds, meshes/<id>.bin (see write_mesh), report.json (counts, skipped refs)
+  textures/<id>.dds, meshes/<id>.bin (see write_mesh), clips/<id>.bin (see write_clip),
+  textassets/<id>.txt|.bytes (TextAsset script fields), resources/<Resources.Load path>.txt|.bytes, report.json (counts, skipped refs)
 IDs are "<file>@<pathID>". All objects are read with the byte-exact readers of unity35_classes.py (E75)."""
 import json, os, struct, sys, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -100,6 +101,21 @@ def write_mesh(path, d, b):
         out += struct.pack(f"<I{len(tris)}I", len(tris), *tris)
     with open(path, "wb") as f: f.write(out)
 
+def write_clip(path, d):
+    """bin layout (LE): 'RCLP', u32 version 1, str name, f32 sampleRate, i32 wrapMode, u32 curveCount, per curve: u8 kind
+    (0 rotation, 1 position, 2 scale, 3 float), u8 n (value components), str path, str attribute, i32 classID,
+    str scriptClass (last three empty/0 unless kind 3), i32 preInfinity, i32 postInfinity, u32 keyCount, then per key
+    1 + 3n floats (time, value[n], inSlope[n], outSlope[n]). str = u32 byte length + utf-8."""
+    def st(x): x = x.encode("utf-8"); return struct.pack("<I", len(x)) + x
+    curves = [(0, 4, cv, "", 0, "") for cv in d["rot"]] + [(1, 3, cv, "", 0, "") for cv in d["pos"]]         + [(2, 3, cv, "", 0, "") for cv in d["scale"]] + [(3, 1, cv, cv["attribute"], cv["classID"], cv.get("scriptClass", "")) for cv in d["float"]]
+    out = bytearray(b"RCLP" + struct.pack("<I", 1) + st(d["name"]) + struct.pack("<fiI", d["sampleRate"], d["wrapMode"], len(curves)))
+    for kind, n, cv, attr, cls, sc in curves:
+        keys = cv["curve"]["keys"]
+        out += struct.pack("<BB", kind, n) + st(cv["path"]) + st(attr) + struct.pack("<i", cls) + st(sc)
+        out += struct.pack("<iiI", cv["curve"]["pre"], cv["curve"]["post"], len(keys))
+        for k in keys: out += struct.pack(f"<{1 + 3 * n}f", *k)
+    with open(path, "wb") as f: f.write(out)
+
 #: M6 critical-path gameplay classes (work/m6_dependency_map.md) that actually carry MonoBehaviour instances
 #: (work/maps/monobehaviour_decode_summary.csv: all decode byte-exact, 0 failures). Decoded generically below and
 #: attached to their GameObject as o["scripts"][cls] so a later Unity-side importer can restore real components.
@@ -130,9 +146,9 @@ SCRIPT_CLASSES = {
 class Exporter:
     def __init__(self, media, out):
         self.F = Files(media); self.out = out
-        for sub in ("textures", "meshes"): os.makedirs(os.path.join(out, sub), exist_ok=True)
+        for sub in ("textures", "meshes", "clips", "textassets", "resources"): os.makedirs(os.path.join(out, sub), exist_ok=True)
         self.objects, self.materials, self.done = [], {}, set()
-        self.textures, self.meshes = set(), set(); self.report = collections.Counter(); self.roots = []
+        self.textures, self.meshes, self.clips, self.texts = set(), set(), set(), set(); self.report = collections.Counter(); self.roots = []
         self.shader_names = {}; self.world = None; self._clsidx = {}
     def shader_name(self, ref):
         if ref is None: return None
@@ -171,6 +187,45 @@ class Exporter:
             cid, b = self.F.get(ref); d = c.mesh(c.R(b))
             write_mesh(os.path.join(self.out, "meshes", rid(ref) + ".bin"), d, b); self.meshes.add(ref)
         return rid(ref)
+    def clip(self, ref):
+        """Export an AnimationClip (74, reader byte-exact on 2,008/2,008, E106) to clips/<id>.bin (see write_clip)."""
+        if ref is None: return None
+        if ref not in self.clips:
+            cid, b = self.F.get(ref)
+            if cid != 74: self.report["non-clip clip ref"] += 1; return None
+            d = c.animationclip(c.R(b))
+            for fc in d["float"]:   # MonoBehaviour-targeted curves: class name = the MonoScript's m_Name
+                sref = self.F.resolve(ref[0], fc["script"]); fc["scriptClass"] = ""
+                if sref and self.F.get(sref)[0] == 115: fc["scriptClass"] = c.R(self.F.get(sref)[1]).string()
+            write_clip(os.path.join(self.out, "clips", rid(ref) + ".bin"), d); self.clips.add(ref)
+        return rid(ref)
+    @staticmethod
+    def _text_ext(data):   # Unity imports .txt as UTF-8 text; anything else stays raw (.bytes)
+        try: data.decode("utf-8"); return ".txt"
+        except UnicodeDecodeError: return ".bytes"
+    def textasset(self, ref):
+        """Export a TextAsset (49) to textassets/<id>.txt|.bytes; returns '<id><ext>'."""
+        if ref is None: return None
+        cid, b = self.F.get(ref)
+        if cid != 49: self.report["non-text textasset ref"] += 1; return None
+        data = c.textasset(c.R(b))["script"]; name = rid(ref) + self._text_ext(data)
+        if ref not in self.texts:
+            with open(os.path.join(self.out, "textassets", name), "wb") as f: f.write(data)
+            self.texts.add(ref)
+        return name
+    def resources(self):
+        """Resources.Load-able TextAssets (ResourceManager 147 in mainData) -> resources/<path>.txt|.bytes, so the
+        reconstructed code's own Resources.Load("Motion/ActionData") etc. works unchanged in the port."""
+        objs, _ = self.F.load("mainData")
+        for pid, (cid, b) in objs.items():
+            if cid != 147: continue
+            for path, pp in c.resourcemanager(c.R(b))["container"]:
+                ref = self.F.resolve("mainData", pp)
+                if not ref or self.F.get(ref)[0] != 49: self.report["resource (non-text) not exported"] += 1; continue
+                data = c.textasset(c.R(self.F.get(ref)[1]))["script"]
+                dst = os.path.join(self.out, "resources", path + self._text_ext(data)); os.makedirs(os.path.dirname(dst), exist_ok=True)
+                with open(dst, "wb") as f: f.write(data)
+                self.report["resource textassets"] += 1
     def gameobject(self, ref, parent):
         """Export GO + its Transform subtree."""
         if ref in self.done: return
@@ -209,9 +264,9 @@ class Exporter:
                                              "minMoveDistance": d["minMoveDistance"], "center": list(d["center"])}
             elif ccid == 111:
                 d = c.animation(c.R(cb))
-                o["animation"] = {"enabled": d["enabled"], "wrapMode": d["wrapMode"], "playAutomatically": d["playAutomatically"]}
-                # clip PPtrs not resolved/exported yet (no AnimationClip asset pipeline) -- empty Animation component
-                # is enough to stop MissingComponentException; clip playback fidelity is a separate, bigger task.
+                o["animation"] = {"enabled": d["enabled"], "wrapMode": d["wrapMode"], "playAutomatically": d["playAutomatically"],
+                                  "defaultClip": self.clip(self.F.resolve(cref[0], d["defaultClip"])),
+                                  "clips": [x for x in (self.clip(self.F.resolve(cref[0], k)) for k in d["clips"]) if x]}
             elif ccid == 114 and (pe := self.post_effect(cref, cb)) is not None:
                 o[pe[0]] = pe[1]
             elif ccid == 114 and (sc := self.script_component(cref, cb)) is not None:
@@ -258,6 +313,8 @@ class Exporter:
             ref = self.F.resolve(level, val)
             if not ref: return None
             cid, b = self.F.get(ref)
+            if cid == 74: return self.clip(ref)   # AnimationClip asset field (e.g. PathCameraRouteSet.m_AnimationClip)
+            if cid == 49: return self.textasset(ref)   # TextAsset field (e.g. MotionDataManager.m_MotionDataResource)
             if cid != 1 and len(b) >= 8:   # not a GameObject: resolve its owning GameObject instead
                 owner = self.F.resolve(ref[0], struct.unpack(">ii", b[:8]))
                 if owner: ref = owner
@@ -366,17 +423,21 @@ class Exporter:
               "fogStart": rs["fogStart"], "fogEnd": rs["fogEnd"], "ambient": list(rs["ambient"]), "skybox": self.material(self.F.resolve(level, rs["skybox"])),
               "haloStrength": rs["haloStrength"], "flareStrength": rs["flareStrength"]}
         return lm, rs
-    def run(self, level, prefab_levels):
+    def run(self, level, prefab_levels, resident_levels=()):
         world = self.world = mbd.World(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "work", "managed_il"))
-        for r in self.scene_roots(level): self.roots.append(rid(r)); self.gameobject(r, None)
+        # resident scenes (level0 = ResidentScenePS3: DontDestroyOnLoad manager objects, e.g. MotionDataManager's motion
+        # name table) are already loaded when a stage starts on PS3; export their roots into the same scene
+        for lv in (level, *resident_levels):
+            for r in self.scene_roots(lv): self.roots.append(rid(r)); self.gameobject(r, None)
         self.map_instances(level, world, self.prefab_table(prefab_levels, world))   # prefab templates themselves never render
-        lm, rs = self.settings(level)
+        lm, rs = self.settings(level); self.resources()
         json.dump({"objects": self.objects, "roots": self.roots, "lightmaps": lm["lightmaps"], "lightmapsMode": lm["mode"], "lightProbes": lm["lightProbes"], "render": rs},
                   open(os.path.join(self.out, "scene.json"), "w"))
         json.dump({"materials": list(self.materials.values())}, open(os.path.join(self.out, "materials.json"), "w"))
         rep = {"gameobjects": len(self.objects), "roots": len(self.roots), "meshes": len(self.meshes), "textures": len(self.textures),
-               "materials": len(self.materials), "renderers": sum(1 for o in self.objects if o["materials"]), **self.report}
+               "materials": len(self.materials), "clips": len(self.clips), "renderers": sum(1 for o in self.objects if o["materials"]), **self.report}
         json.dump(rep, open(os.path.join(self.out, "report.json"), "w"), indent=1); print(rep)
 
 if __name__ == "__main__":
-    Exporter(sys.argv[1], sys.argv[2]).run(sys.argv[3], sys.argv[4:])
+    res = [a.split("=", 1)[1] for a in sys.argv[4:] if a.startswith("--resident=")]
+    Exporter(sys.argv[1], sys.argv[2]).run(sys.argv[3], [a for a in sys.argv[4:] if not a.startswith("--")], res)

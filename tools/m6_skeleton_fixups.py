@@ -32,6 +32,11 @@ METHOD_FIXUPS = {
     ("WatchPointManager", "GetInstance"): "return m_self;",
     ("TargetManager", "GetInstance"): "return m_self;",
     ("DangerManager", "GetInstance"): "return m_self;",
+    ("TutorialTextManager", "GetInstance"): "return m_self;",
+    ("GimmickManager", "GetInstance"): (
+        "if (_inst == null) _inst = global::UnityEngine.Object.FindObjectOfType(typeof(global::GimmickManager)) "
+        "as global::GimmickManager; return _inst;"
+    ),
     ("EffectManager", "GetInstance"): (
         "if (!s_hasSelf) { s_self = global::UnityEngine.Object.FindObjectOfType(typeof(global::EffectManager)) "
         "as global::EffectManager; s_hasSelf = s_self != null; } return s_self;"

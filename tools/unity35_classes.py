@@ -132,7 +132,39 @@ def animation(r):
     r.p += 28   # 7 more i32: animatePhysics/animateOnlyIfVisible/unknown -- raw, not modelled yet
     return d
 
-READERS = {20: camera, 197: lightprobes, 104: rendersettings, 157: lightmapsettings, 48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material, 143: charactercontroller, 111: animation}
+def _curve(r, n):
+    keys = [r.fs(1 + 3*n) for _ in range(r.count())]   # time, value[n], inSlope[n], outSlope[n]
+    return {"keys": keys, "pre": r.i32(), "post": r.i32()}
+
+def _packed(r, kind):
+    d = {"n": r.u32()}
+    if kind == "f": d["range"] = r.f32(); d["start"] = r.f32()
+    d["data"] = r.bytes_()
+    if kind != "q": d["bits"] = r.u8(); r.align()
+    return d
+
+def animationclip(r):
+    # Unity 3.5 legacy clip (no Mecanim in this game). Layout = 3.5 type-tree field order, validated by consumption.
+    d = {"name": r.string(), "compressed": (r.boolean(), r.align())[0]}
+    d["rot"] = [{"curve": _curve(r, 4), "path": r.string()} for _ in range(r.count())]
+    d["crot"] = [{"path": r.string(), "times": _packed(r, "i"), "values": _packed(r, "q"), "slopes": _packed(r, "f"),
+                  "pre": r.i32(), "post": r.i32()} for _ in range(r.count())]
+    d["pos"] = [{"curve": _curve(r, 3), "path": r.string()} for _ in range(r.count())]
+    d["scale"] = [{"curve": _curve(r, 3), "path": r.string()} for _ in range(r.count())]
+    d["float"] = [{"curve": _curve(r, 1), "attribute": r.string(), "path": r.string(), "classID": r.i32(),
+                   "script": r.pptr()} for _ in range(r.count())]
+    d["sampleRate"] = r.f32(); d["wrapMode"] = r.i32(); d["bounds"] = r.fs(6)
+    d["events"] = [{"time": r.f32(), "function": r.string(), "data": r.string(), "object": r.pptr(),
+                    "float": r.f32(), "int": r.i32(), "messageOptions": r.i32()} for _ in range(r.count())]
+    return d
+
+def textasset(r): return {"name": r.string(), "script": r.bytes_(), "path": r.string()}
+
+def resourcemanager(r):   # m_Container: Resources.Load path (lower-case, no extension) -> object
+    return {"container": [(r.string(), r.pptr()) for _ in range(r.count())],
+            "dependentAssets": [(r.pptr(), r.vec(r.pptr)) for _ in range(r.count())]}
+
+READERS = {20: camera, 197: lightprobes, 104: rendersettings, 157: lightmapsettings, 48: shader, 43: mesh, 28: texture2d, 1: gameobject, 4: transform, 33: meshfilter, 23: renderer_base, 21: material, 143: charactercontroller, 111: animation, 74: animationclip, 49: textasset, 147: resourcemanager}
 
 def validate(media, cids, dump=0):
     files = sorted(glob.glob(os.path.join(media, "level*"))) + sorted(glob.glob(os.path.join(media, "*.assets"))) \
